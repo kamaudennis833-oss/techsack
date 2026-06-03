@@ -2622,13 +2622,11 @@ while($row=mysqli_fetch_assoc($quizzes))
 </tr>
 
 <?php
-
 $attempts = mysqli_query($conn,"
 SELECT
     qa.*,
     u.full_name,
-    q.title AS quiz_title,
-    qa.status
+    q.title AS quiz_title
 
 FROM quiz_attempts qa
 
@@ -2637,25 +2635,50 @@ LEFT JOIN quizzes q ON q.id = qa.quiz_id
 
 ORDER BY qa.id DESC
 ");
-while($attempt=mysqli_fetch_assoc($attempts))
+
+while($attempt = mysqli_fetch_assoc($attempts))
 {
+
+    /* =========================
+       CALCULATE PERCENTAGE
+    ========================= */
+    $score = $attempt['score'];
+
+    // Get total marks for this quiz
+    $quiz_id = $attempt['quiz_id'];
+
+    $total_query = mysqli_query($conn,"
+        SELECT SUM(marks) AS total_marks
+        FROM quiz_questions
+        WHERE quiz_id='$quiz_id'
+    ");
+
+    $total_row = mysqli_fetch_assoc($total_query);
+    $total_marks = $total_row['total_marks'] ?? 0;
+
+    $percentage = ($total_marks > 0)
+        ? round(($score / $total_marks) * 100)
+        : 0;
+
 ?>
 
 <tr>
 
-<td><?= $attempt['full_name'] ?></td>
+    <td><?= $attempt['full_name'] ?></td>
 
-<td><?= $attempt['quiz_title'] ?></td>
+    <td><?= $attempt['quiz_title'] ?></td>
 
-<td><?= $attempt['score'] ?></td>
+    <td><?= $attempt['score'] ?></td>
 
-<td><?= $attempt['percentage'] ?>%</td>
+    <td><?= $percentage ?>%</td>
 
-<td class="<?= strtolower($attempt['result']) ?>">
-<?= $attempt['result'] ?>
-</td>
+    <td class="<?= strtolower($attempt['result']) ?>">
+        <?= $attempt['result'] ?>
+    </td>
 
-<td><?= $attempt['created_at'] ?></td>
+    <td>
+        <?= $attempt['finished_at'] ?? $attempt['started_at'] ?>
+    </td>
 
 </tr>
 

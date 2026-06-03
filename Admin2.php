@@ -2613,71 +2613,72 @@ while($row=mysqli_fetch_assoc($quizzes))
 <table>
 
 <tr>
-<th>Student</th>
-<th>Quiz</th>
-<th>Score</th>
-<th>Percentage</th>
-<th>Result</th>
-<th>Date</th>
+    <th>Student</th>
+    <th>Quiz</th>
+    <th>Score</th>
+    <th>Percentage</th>
+    <th>Result</th>
+    <th>Status</th>
+    <th>Date</th>
 </tr>
 
 <?php
+
 $attempts = mysqli_query($conn,"
 SELECT
     qa.*,
     u.full_name,
     q.title AS quiz_title
-
 FROM quiz_attempts qa
-
 LEFT JOIN users u ON u.id = qa.user_id
 LEFT JOIN quizzes q ON q.id = qa.quiz_id
-
 ORDER BY qa.id DESC
 ");
 
 while($attempt = mysqli_fetch_assoc($attempts))
 {
-
-    /* =========================
-       CALCULATE PERCENTAGE
-    ========================= */
-    $score = $attempt['score'];
-
-    // Get total marks for this quiz
     $quiz_id = $attempt['quiz_id'];
 
+    // Get total marks for this quiz
     $total_query = mysqli_query($conn,"
-        SELECT SUM(marks) AS total_marks
+        SELECT COALESCE(SUM(marks),0) AS total_marks
         FROM quiz_questions
         WHERE quiz_id='$quiz_id'
     ");
 
     $total_row = mysqli_fetch_assoc($total_query);
-    $total_marks = $total_row['total_marks'] ?? 0;
+    $total_marks = $total_row['total_marks'];
 
-    $percentage = ($total_marks > 0)
-        ? round(($score / $total_marks) * 100)
-        : 0;
+    $percentage = 0;
 
+    if($total_marks > 0)
+    {
+        $percentage = round(($attempt['score'] / $total_marks) * 100);
+    }
 ?>
 
 <tr>
 
-    <td><?= $attempt['full_name'] ?></td>
+    <td><?= htmlspecialchars($attempt['full_name']) ?></td>
 
-    <td><?= $attempt['quiz_title'] ?></td>
+    <td><?= htmlspecialchars($attempt['quiz_title']) ?></td>
 
     <td><?= $attempt['score'] ?></td>
 
     <td><?= $percentage ?>%</td>
 
     <td class="<?= strtolower($attempt['result']) ?>">
-        <?= $attempt['result'] ?>
+        <?= htmlspecialchars($attempt['result']) ?>
+    </td>
+
+    <td class="<?= strtolower($attempt['status']) ?>">
+        <?= ucfirst($attempt['status']) ?>
     </td>
 
     <td>
-        <?= $attempt['finished_at'] ?? $attempt['started_at'] ?>
+        <?= !empty($attempt['finished_at'])
+            ? $attempt['finished_at']
+            : $attempt['started_at']; ?>
     </td>
 
 </tr>

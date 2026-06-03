@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Teacher Dashboard</title>
+
+<link rel="stylesheet"
+href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+<style>
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family:Arial, sans-serif;
+}
+
+body{
+    background:#f5f6fa;
+    display:flex;
+}
+
+/* Sidebar */
+
+.sidebar{
+    width:260px;
+    height:100vh;
+    background:#1e293b;
+    color:white;
+    position:fixed;
+    left:0;
+    top:0;
+}
+
+.logo{
+    text-align:center;
+    padding:25px;
+    font-size:22px;
+    font-weight:bold;
+    border-bottom:1px solid rgba(255,255,255,.1);
+}
+
+.sidebar ul{
+    list-style:none;
+}
+
+.sidebar ul li{
+    border-bottom:1px solid rgba(255,255,255,.05);
+}
+
+.sidebar ul li a{
+    display:block;
+    color:white;
+    text-decoration:none;
+    padding:16px 20px;
+    transition:.3s;
+}
+
+.sidebar ul li a:hover{
+    background:#334155;
+}
+
+.sidebar ul li a i{
+    margin-right:10px;
+}
+
+/* Main */
+
+.main{
+    margin-left:260px;
+    width:100%;
+    padding:25px;
+}
+
+.header{
+    background:white;
+    padding:20px;
+    border-radius:10px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+}
+
+.teacher-info{
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+
+.teacher-info img{
+    width:45px;
+    height:45px;
+    border-radius:50%;
+}
+
+/* Cards */
+
+.cards{
+    margin-top:25px;
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:20px;
+}
+
+.card{
+    background:white;
+    padding:20px;
+    border-radius:10px;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+}
+
+.card h2{
+    margin-top:10px;
+    color:#2563eb;
+}
+
+.card i{
+    font-size:28px;
+    color:#2563eb;
+}
+
+/* Sections */
+
+.section{
+    margin-top:25px;
+    background:white;
+    padding:20px;
+    border-radius:10px;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+}
+
+.section h3{
+    margin-bottom:15px;
+}
+
+/* Table */
+
+table{
+    width:100%;
+    border-collapse:collapse;
+}
+
+table th,
+table td{
+    border:1px solid #ddd;
+    padding:12px;
+    text-align:left;
+}
+
+table th{
+    background:#2563eb;
+    color:white;
+}
+
+/* Buttons */
+
+.btn{
+    padding:8px 15px;
+    border:none;
+    border-radius:5px;
+    cursor:pointer;
+    color:white;
+}
+
+.view{
+    background:#16a34a;
+}
+
+.edit{
+    background:#f59e0b;
+}
+
+.delete{
+    background:#dc2626;
+}
+
+/* Activities */
+
+.activity{
+    display:flex;
+    justify-content:space-between;
+    padding:12px 0;
+    border-bottom:1px solid #eee;
+}
+
+.activity:last-child{
+    border-bottom:none;
+}
+
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+
+<div class="sidebar">
+
+    <div class="logo">
+        LMS Teacher
+    </div>
+
+    <ul>
+        <li><a href="#"><i class="fas fa-home"></i> Dashboard</a></li>
+        <li><a href="#"><i class="fas fa-book"></i> My Courses</a></li>
+        <li><a href="#"><i class="fas fa-file-pdf"></i> Notes</a></li>
+        <li><a href="#"><i class="fas fa-video"></i> Videos</a></li>
+        <li><a href="#"><i class="fas fa-question-circle"></i> Quizzes</a></li>
+        <li><a href="#"><i class="fas fa-users"></i> Students</a></li>
+        <li><a href="#"><i class="fas fa-chart-line"></i> Reports</a></li>
+        <li><a href="#"><i class="fas fa-bullhorn"></i> Announcements</a></li>
+        <li><a href="#"><i class="fas fa-user"></i> Profile</a></li>
+        <li><a href="#"><i class="fas fa-cog"></i> Settings</a></li>
+        <li><a href="#"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
+    </ul>
+
+</div>
+
+<!-- MAIN -->
+
+<div class="main">
+
+    <!-- Header -->
+
+    <div class="header">
+
+        <div>
+            <h2>Teacher Dashboard</h2>
+            <p>Welcome back, Instructor</p>
+        </div>
+
+        <div class="teacher-info">
+            <img src="https://via.placeholder.com/45" alt="">
+            <strong>John Teacher</strong>
+        </div>
+
+    </div>
+
+    <!-- Cards -->
+
+    <div class="cards">
+
+        <div class="card">
+            <i class="fas fa-book"></i>
+            <h2>12</h2>
+            <p>My Courses</p>
+        </div>
+
+        <div class="card">
+            <i class="fas fa-users"></i>
+            <h2>350</h2>
+            <p>Students</p>
+        </div>
+
+        <div class="card">
+            <i class="fas fa-file-pdf"></i>
+            <h2>45</h2>
+            <p>Notes Uploaded</p>
+        </div>
+
+        <div class="card">
+            <i class="fas fa-video"></i>
+            <h2>28</h2>
+            <p>Videos Uploaded</p>
+        </div>
+
+        <div class="card">
+            <i class="fas fa-question-circle"></i>
+            <h2>15</h2>
+            <p>Quizzes</p>
+        </div>
+
+        <div class="card">
+            <i class="fas fa-chart-pie"></i>
+            <h2>78%</h2>
+            <p>Completion Rate</p>
+        </div>
+
+    </div>
+
+    <!-- Courses -->
+
+    <div class="section">
+
+        <h3>My Courses</h3>
+
+        <table>
+
+            <tr>
+                <th>Course</th>
+                <th>Students</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+
+            <tr>
+                <td>Web Development</td>
+                <td>120</td>
+                <td>Active</td>
+                <td>
+                    <button class="btn view">View</button>
+                    <button class="btn edit">Edit</button>
+                    <button class="btn delete">Delete</button>
+                </td>
+            </tr>
+
+            <tr>
+                <td>Python Programming</td>
+                <td>95</td>
+                <td>Active</td>
+                <td>
+                    <button class="btn view">View</button>
+                    <button class="btn edit">Edit</button>
+                    <button class="btn delete">Delete</button>
+                </td>
+            </tr>
+
+        </table>
+
+    </div>
+
+    <!-- Recent Activities -->
+
+    <div class="section">
+
+        <h3>Recent Activities</h3>
+
+        <div class="activity">
+            <span>New student enrolled in Web Development</span>
+            <span>10 mins ago</span>
+        </div>
+
+        <div class="activity">
+            <span>Quiz submitted by student</span>
+            <span>25 mins ago</span>
+        </div>
+
+        <div class="activity">
+            <span>New video uploaded</span>
+            <span>1 hour ago</span>
+        </div>
+
+        <div class="activity">
+            <span>Course completed by student</span>
+            <span>2 hours ago</span>
+        </div>
+
+    </div>
+
+</div>
+
+</body>
+</html>

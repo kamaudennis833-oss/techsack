@@ -1,4 +1,6 @@
 <?php
+date_default_timezone_set("Africa/Nairobi");
+
 include "db.php";
 include "sendmail.php";
 
@@ -6,18 +8,22 @@ $error = "";
 
 if(isset($_POST['register'])){
 
+    // CLEAN INPUTS (IMPORTANT FIX)
     $name = trim($_POST['full_name']);
-    $email = trim($_POST['email']);
+    $email = strtolower(trim($_POST['email']));
     $phone = trim($_POST['phone']);
     $passwordRaw = $_POST['password'];
 
-    if($name == "" || $email == "" || $phone == "" || $passwordRaw == ""){
+    if(empty($name) || empty($email) || empty($phone) || empty($passwordRaw)){
         $error = "All fields are required!";
     } else {
 
-        // check if user exists in FINAL table
-        $check = $conn->prepare("SELECT id FROM students WHERE email=? OR phone=?");
-        $check->bind_param("ss",$email,$phone);
+        // 1. CHECK IF USER ALREADY EXISTS (FINAL TABLE)
+        $check = $conn->prepare("
+            SELECT id FROM users 
+            WHERE email=? OR phone=?
+        ");
+        $check->bind_param("ss", $email, $phone);
         $check->execute();
         $check->store_result();
 
@@ -25,39 +31,51 @@ if(isset($_POST['register'])){
             $error = "User already registered!";
         } else {
 
-            // hash password
-            $password = password_hash($passwordRaw, PASSWORD_BCRYPT);
+            $check->close();
 
-            // OTP system
-            $otp = random_int(100000,999999);
+            // 2. DELETE OLD PENDING OTP (IMPORTANT FIX)
+            $del = $conn->prepare("
+                DELETE FROM pending_students 
+                WHERE email=?
+            ");
+            $del->bind_param("s", $email);
+            $del->execute();
+            $del->close();
+
+            // 3. HASH PASSWORD
+            $passwordHash = password_hash($passwordRaw, PASSWORD_DEFAULT);
+
+            // 4. OTP + EXPIRY
+            $otp = random_int(100000, 999999);
             $otp_created = date("Y-m-d H:i:s");
+            $otp_expires = date("Y-m-d H:i:s", strtotime("+10 minutes"));
 
-            // save to pending table
+            // 5. INSERT PENDING USER
             $stmt = $conn->prepare("
-                INSERT INTO pending_students(full_name,email,phone,password,otp,otp_created)
-                VALUES (?,?,?,?,?,?)
+                INSERT INTO pending_students
+                (full_name, email, phone, password, otp, otp_created, otp_expires)
+                VALUES (?,?,?,?,?,?,?)
             ");
 
             $stmt->bind_param(
-                "ssssss",
+                "sssssss",
                 $name,
                 $email,
                 $phone,
-                $password,
+                $passwordHash,
                 $otp,
-                $otp_created
+                $otp_created,
+                $otp_expires
             );
 
             if($stmt->execute()){
 
-                // SEND OTP EMAIL
+                // 6. SEND OTP
                 if(sendOTP($email, $otp)){
-
                     header("Location: verify.php?email=" . urlencode($email));
                     exit();
-
                 } else {
-                    $error = "Failed to send OTP email. Check SMTP settings.";
+                    $error = "OTP email failed. Check mail server.";
                 }
 
             } else {
@@ -67,7 +85,6 @@ if(isset($_POST['register'])){
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -111,11 +128,6 @@ input{
     margin:8px 0;
     border:1px solid #ccc;
     border-radius:8px;
-    outline:none;
-}
-
-input:focus{
-    border-color:green;
 }
 
 button{
@@ -139,8 +151,10 @@ button:hover{
     text-align:center;
     margin-bottom:10px;
 }
+
 .login-link{
     margin-top: 15px;
+    text-align:center;
 }
 </style>
 </head>
@@ -155,18 +169,19 @@ button:hover{
 
 <form method="POST">
 
-    <input type="text" name="full_name" placeholder="Full Name">
-    <input type="email" name="email" placeholder="Email Address">
-    <input type="text" name="phone" placeholder="Phone Number">
-    <input type="password" name="password" placeholder="Password">
+    <input type="text" name="full_name" placeholder="Full Name" required>
+    <input type="email" name="email" placeholder="Email Address" required>
+    <input type="text" name="phone" placeholder="Phone Number" required>
+    <input type="password" name="password" placeholder="Password" required>
 
     <button type="submit" name="register">Create Account</button>
 
 </form>
- <div class="login-link">
-            You have an account?
-            <a href="Login.php">login</a>
-        </div>
+
+<div class="login-link">
+    You already have an account?
+    <a href="login.php">Login</a>
+</div>
 
 </div>
 

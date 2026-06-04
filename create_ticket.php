@@ -1,37 +1,51 @@
 <?php
-session_start();
 include "db.php";
 
-
-
-$user_id = $_SESSION['user_id'];
-
 /* =========================
-   HANDLE FORM SUBMISSION
+   CREATE TICKET (NO LOGIN)
 ========================= */
-if(isset($_POST['type'])){
 
-    // sanitize inputs
-    $type = mysqli_real_escape_string($conn, $_POST['type']);
-    $subject = mysqli_real_escape_string($conn, $_POST['subject']);
-    $message = mysqli_real_escape_string($conn, $_POST['message']);
+if (isset($_POST['submit_ticket'])) {
 
-    // extra safety check
-    if(empty($type) || empty($subject) || empty($message)){
-        die("All fields are required.");
+    // Default system user (IMPORTANT)
+    // Change this to an existing user id in your users table
+    $user_id = 1;
+
+    $type = mysqli_real_escape_string($conn, trim($_POST['type']));
+    $subject = mysqli_real_escape_string($conn, trim($_POST['subject']));
+    $message = mysqli_real_escape_string($conn, trim($_POST['message']));
+
+    if (empty($type) || empty($subject) || empty($message)) {
+        header("Location: student_support.php?error=empty");
+        exit();
     }
 
-    // insert ticket
-    $insert = mysqli_query($conn, "
-        INSERT INTO tickets (user_id, type, subject, message, status)
-        VALUES ('$user_id', '$type', '$subject', '$message', 'open')
-    ");
+    $sql = "
+        INSERT INTO tickets
+        (
+            user_id,
+            type,
+            subject,
+            message,
+            status
+        )
+        VALUES
+        (
+            '$user_id',
+            '$type',
+            '$subject',
+            '$message',
+            'open'
+        )
+    ";
 
-    if($insert){
+    $insert = mysqli_query($conn, $sql);
+
+    if ($insert) {
         header("Location: name.php?success=1");
         exit();
     } else {
-        echo "Database Error: " . mysqli_error($conn);
+        die("Database Error: " . mysqli_error($conn));
     }
 }
 ?>

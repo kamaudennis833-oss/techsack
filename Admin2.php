@@ -2796,82 +2796,144 @@ while($c = $courses->fetch_assoc()){
 <!--ANOUNCEMENT SECTION --> 
 <div class="box" id="announcementSection" style="display:none;">
 <style>
-body{font-family:Arial;background:#f5f6fa;margin:0;}
-.container{padding:20px;}
-
-.box{
-background:#fff;
-padding:15px;
-border-radius:10px;
-margin-bottom:20px;
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
 }
 
-input,textarea,select{
-width:100%;
-padding:10px;
-margin:5px 0;
+body{
+    font-family:Arial, sans-serif;
+    background:#f5f6fa;
+}
+
+.container{
+    padding:20px;
+    max-width:1200px;
+    margin:auto;
+}
+
+.box{
+    background:#fff;
+    padding:20px;
+    border-radius:10px;
+    margin-bottom:20px;
+    box-shadow:0 2px 5px rgba(0,0,0,0.1);
+}
+
+input,
+textarea,
+select{
+    width:100%;
+    padding:12px;
+    margin:8px 0 15px;
+    border:1px solid #ccc;
+    border-radius:5px;
+    font-size:14px;
+    outline:none;
+    background:#fff;
+}
+
+input:focus,
+textarea:focus,
+select:focus{
+    border-color:#2563eb;
+    box-shadow:0 0 5px rgba(37,99,235,0.3);
+}
+
+textarea{
+    min-height:120px;
+    resize:vertical;
 }
 
 button{
-background:#2563eb;
-color:#fff;
-padding:10px;
-border:none;
-cursor:pointer;
-border-radius:5px;
+    background:#2563eb;
+    color:#fff;
+    padding:12px 20px;
+    border:none;
+    cursor:pointer;
+    border-radius:5px;
+    font-size:14px;
+}
+
+button:hover{
+    background:#1d4ed8;
 }
 
 table{
-width:100%;
-border-collapse:collapse;
-background:#fff;
+    width:100%;
+    border-collapse:collapse;
+    background:#fff;
+    overflow:hidden;
 }
 
-th,td{
-padding:10px;
-border:1px solid #ddd;
+th,
+td{
+    padding:12px;
+    border:1px solid #ddd;
+    text-align:left;
 }
 
 th{
-background:#2563eb;
-color:#fff;
+    background:#2563eb;
+    color:#fff;
 }
 
 .delete{
-background:red;
-color:white;
-padding:5px 10px;
-text-decoration:none;
+    background:red;
+    color:white;
+    padding:6px 12px;
+    border-radius:4px;
+    text-decoration:none;
+    display:inline-block;
+}
+
+.delete:hover{
+    background:#cc0000;
 }
 </style>
+
 <div class="container">
 
 <h2>📢 Teacher Announcements</h2>
 
-<!-- FORM -->
 <div class="box">
 
 <form method="POST">
 
 <label>Select Course</label>
+
 <select name="course_id" required>
-<?php while($c = $courses->fetch_assoc()) { ?>
-<option value="<?php echo $c['id']; ?>">
-<?php echo $c['title']; ?>
-</option>
-<?php } ?>
+    <option value="">-- Select Course --</option>
+
+    <?php while($c = mysqli_fetch_assoc($courses)) { ?>
+        <option value="<?= $c['id']; ?>">
+            <?= htmlspecialchars($c['title']); ?>
+        </option>
+    <?php } ?>
+
 </select>
 
-<input type="text" name="title" placeholder="Title" required>
+<input
+    type="text"
+    name="title"
+    placeholder="Title"
+    required
+>
 
-<textarea name="message" placeholder="Message..." required></textarea>
+<textarea
+    name="message"
+    placeholder="Message..."
+    required
+></textarea>
 
-<button name="add">Post Announcement</button>
+<button type="submit" name="add">
+    Post Announcement
+</button>
 
 </form>
 
 </div>
-
 <!-- TABLE -->
 <table>
 
@@ -2898,6 +2960,7 @@ text-decoration:none;
 <?php } ?>
 
 </table>
+
 
 </div>
 </div>
@@ -3130,55 +3193,112 @@ Reject
             margin-bottom:15px;
         }
     </style>
-  <div class="title-bar">
-    <h2>📩 All Support Tickets (Admin Panel)</h2>
-</div>
+  <?php
 
-<table>
+/* UPDATE STATUS */
+
+if(isset($_POST['update_status']))
+{
+    $ticket_id = intval($_POST['ticket_id']);
+    $status = $_POST['status'];
+
+    mysqli_query($conn,"
+        UPDATE tickets
+        SET status='$status'
+        WHERE id='$ticket_id'
+    ");
+}
+?>
+
+<h2>All Support Tickets</h2>
+
+<table border="1" width="100%">
+
 <tr>
-    <th>User ID</th>
+    <th>Student</th>
     <th>Type</th>
     <th>Subject</th>
+    <th>Message</th>
     <th>Status</th>
     <th>Action</th>
 </tr>
 
 <?php
-$result = mysqli_query($conn, "SELECT * FROM tickets ORDER BY created_at DESC");
 
-while($row = mysqli_fetch_assoc($result)) {
+$result = mysqli_query($conn,"
+SELECT
+    t.*,
+    u.full_name
+FROM tickets t
+LEFT JOIN users u
+ON u.id=t.user_id
+ORDER BY t.id DESC
+");
+
+while($row=mysqli_fetch_assoc($result))
+{
 ?>
 
 <tr>
-    <td><?= $row['user_id'] ?></td>
+
+    <td><?= $row['full_name'] ?></td>
+
     <td><?= $row['type'] ?></td>
+
     <td><?= $row['subject'] ?></td>
 
-    <td>
-        <span class="status <?= $row['status'] ?>">
-            <?= strtoupper($row['status']) ?>
-        </span>
-    </td>
+    <td><?= $row['message'] ?></td>
+
+    <td><?= strtoupper($row['status']) ?></td>
 
     <td>
+
         <form method="POST">
-            <input type="hidden" name="ticket_id" value="<?= $row['id'] ?>">
+
+            <input
+                type="hidden"
+                name="ticket_id"
+                value="<?= $row['id'] ?>">
 
             <select name="status">
-                <option value="open">Open</option>
-                <option value="in_progress">In Progress</option>
-                <option value="resolved">Resolved</option>
-                <option value="closed">Closed</option>
+
+                <option value="open"
+                <?= $row['status']=='open'?'selected':'' ?>>
+                Open
+                </option>
+
+                <option value="in_progress"
+                <?= $row['status']=='in_progress'?'selected':'' ?>>
+                In Progress
+                </option>
+
+                <option value="resolved"
+                <?= $row['status']=='resolved'?'selected':'' ?>>
+                Resolved
+                </option>
+
+                <option value="closed"
+                <?= $row['status']=='closed'?'selected':'' ?>>
+                Closed
+                </option>
+
             </select>
 
-            <button type="submit" name="update_status">Update</button>
+            <button
+                type="submit"
+                name="update_status">
+                Update
+            </button>
+
         </form>
+
     </td>
+
 </tr>
 
 <?php } ?>
 
-</table>  
+</table>
 
 </div>
 

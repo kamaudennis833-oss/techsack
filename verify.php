@@ -1,80 +1,112 @@
 <?php
+date_default_timezone_set("Africa/Nairobi");
+
 session_start();
 include "db.php";
-
-require_once "sendmail.php";
 
 $email = $_GET['email'] ?? '';
 $msg = "";
 $success = false;
 
-if($email == ""){
+if(empty($email)){
     die("Invalid access. Email missing.");
 }
 
 if(isset($_POST['verify'])){
 
     $otp = trim($_POST['otp']);
+    $otp = preg_replace('/\s+/', '', $otp);
 
-    // check OTP + expiry
-    $stmt = $conn->prepare("
-        SELECT * FROM pending_students 
-        WHERE email=? AND otp=? 
-        AND otp_created >= (NOW() - INTERVAL 5 MINUTE)
-    ");
+    if(!preg_match('/^[0-9]{6}$/', $otp)){
+        $msg = "OTP must be 6 digits.";
+    } else {
 
-    $stmt->bind_param("ss", $email, $otp);
-    $stmt->execute();
-    $result = $stmt->get_result();
-
-    if($row = $result->fetch_assoc()){
-
-        // move to students table
-        $insert = $conn->prepare("
-            INSERT INTO students(full_name,email,phone,password)
-            VALUES (?,?,?,?)
+        // 1. CHECK OTP FROM pending_students
+        $stmt = $conn->prepare("
+            SELECT * 
+            FROM pending_students
+            WHERE email=?
+            AND otp=?
+            AND otp_verified=0
+            AND otp_expires > NOW()
+            LIMIT 1
         ");
 
-        $insert->bind_param(
-            "ssss",
-            $row['full_name'],
-            $row['email'],
-            $row['phone'],
-            $row['password']
-        );
+        $stmt->bind_param("ss", $email, $otp);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
-        $insert->execute();
+        if($row = $result->fetch_assoc()){
 
-        // delete pending record
-        $del = $conn->prepare("DELETE FROM pending_students WHERE email=?");
-        $del->bind_param("s", $email);
-        $del->execute();
+            // 2. CHECK IF USER ALREADY EXISTS IN users TABLE
+            $check = $conn->prepare("SELECT id FROM users WHERE email=?");
+            $check->bind_param("s", $email);
+            $check->execute();
+            $check->store_result();
 
-        // session
-        $_SESSION['student_email'] = $row['email'];
-        $_SESSION['student_name'] = $row['full_name'];
+            if($check->num_rows > 0){
+                $msg = "Account already exists. Please login.";
+            } else {
 
-        $success = true;
+                // 3. CREATE FINAL USER ACCOUNT
+                $insert = $conn->prepare("
+                    INSERT INTO users
+                    (full_name, email, phone, password, is_verified, status)
+                    VALUES (?,?,?,?,1,'active')
+                ");
 
-    } else {
-        $msg = "Invalid or expired OTP (valid for 5 minutes)";
+                $insert->bind_param(
+                    "ssss",
+                    $row['full_name'],
+                    $row['email'],
+                    $row['phone'],
+                    $row['password']
+                );
+
+                if($insert->execute()){
+
+                    // 4. MARK OTP VERIFIED
+                    $update = $conn->prepare("
+                        UPDATE pending_students
+                        SET otp_verified=1
+                        WHERE id=?
+                    ");
+                    $update->bind_param("i", $row['id']);
+                    $update->execute();
+
+                    // 5. DELETE TEMP RECORD
+                    $delete = $conn->prepare("
+                        DELETE FROM pending_students
+                        WHERE id=?
+                    ");
+                    $delete->bind_param("i", $row['id']);
+                    $delete->execute();
+
+                    // 6. SESSION LOGIN
+                    $_SESSION['user_email'] = $row['email'];
+                    $_SESSION['user_name'] = $row['full_name'];
+
+                    $success = true;
+
+                    // OPTIONAL: redirect after success
+                    header("refresh:3;url=login.php");
+
+                } else {
+                    $msg = "Failed to create account.";
+                }
+            }
+
+        } else {
+            $msg = "Invalid or expired OTP.";
+        }
     }
 }
 ?>
 
-<!DOCTYPE html>
-<html>
-<head>
-<title>OTP Verification</title>
-
-<?php if($success): ?>
-<meta http-equiv="refresh" content="3;url=login.php">
-<?php endif; ?>
-
 <style>
 body{
     margin:0;
-    font-family:Arial;
+    font-family:Arial, sans-serif;
     height:100vh;
     display:flex;
     justify-content:center;
@@ -84,10 +116,10 @@ body{
 
 .box{
     width:360px;
-    background:white;
+    background:#fff;
     padding:30px;
     border-radius:12px;
-    box-shadow:0 10px 20px rgba(0,0,0,0.2);
+    box-shadow:0 10px 20px rgba(0,0,0,.2);
     text-align:center;
 }
 
@@ -101,6 +133,7 @@ input{
     margin:10px 0;
     border:1px solid #ccc;
     border-radius:8px;
+    box-sizing:border-box;
 }
 
 button{
@@ -108,7 +141,7 @@ button{
     padding:12px;
     border:none;
     background:green;
-    color:white;
+    color:#fff;
     border-radius:8px;
     cursor:pointer;
     font-weight:bold;
@@ -120,13 +153,13 @@ button:hover{
 
 .error{
     color:red;
-    margin-bottom:10px;
+    margin-bottom:15px;
 }
 
 .success{
     color:green;
     font-weight:bold;
-    margin-bottom:10px;
+    margin-bottom:15px;
 }
 </style>
 </head>
@@ -135,32 +168,37 @@ button:hover{
 
 <div class="box">
 
-<h2>OTP Verification</h2>
+    <h2>OTP Verification</h2>
 
-<?php if($success): ?>
+    <?php if($success): ?>
 
-    <div class="success">
-        ✅ Verification successful!<br>
-        Redirecting to login...
-    </div>
+        <div class="success">
+            ✅ Verification successful!<br>
+            Redirecting to login...
+        </div>
 
-<?php elseif($msg): ?>
+    <?php else: ?>
 
-    <div class="error"><?php echo $msg; ?></div>
+        <?php if($msg): ?>
+            <div class="error"><?= htmlspecialchars($msg) ?></div>
+        <?php endif; ?>
 
-    <form method="POST">
-        <input type="text" name="otp" placeholder="Enter OTP">
-        <button type="submit">Verify Account</button>
-    </form>
+        <form method="POST">
 
-<?php else: ?>
+            <input
+                type="text"
+                name="otp"
+                placeholder="Enter 6-digit OTP"
+                maxlength="6"
+                required>
 
-    <form method="POST">
-        <input type="text" name="otp" placeholder="Enter OTP">
-        <button type="submit">Verify Account</button>
-    </form>
+            <button type="submit" name="verify">
+                Verify Account
+            </button>
 
-<?php endif; ?>
+        </form>
+
+    <?php endif; ?>
 
 </div>
 

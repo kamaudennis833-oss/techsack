@@ -9,20 +9,39 @@ if(isset($_POST['login'])){
     $email = trim($_POST['email']);
     $password = $_POST['password'];
 
-    $stmt = $conn->prepare("SELECT * FROM students WHERE email=?");
+    // 1. GET USER FROM users TABLE
+    $stmt = $conn->prepare("
+        SELECT * 
+        FROM users 
+        WHERE email=?
+        LIMIT 1
+    ");
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $result = $stmt->get_result();
 
     if($row = $result->fetch_assoc()){
 
-        // SIMPLE PASSWORD CHECK (FOR TESTING ONLY)
-        if($password === $row['password']){
+        // 2. CHECK IF ACCOUNT IS VERIFIED
+        if($row['is_verified'] != 1){
+            $error = "Please verify your email first.";
+        }
 
-            $_SESSION['student_id'] = $row['id'];
-            $_SESSION['student_name'] = $row['full_name'];
-            $_SESSION['student_email'] = $row['email'];
+        // 3. CHECK STATUS
+        else if($row['status'] != "active"){
+            $error = "Your account is not active.";
+        }
 
+        // 4. PASSWORD VERIFY (IMPORTANT FIX)
+        else if(password_verify($password, $row['password'])){
+
+            // SESSION (FIXED NAMES)
+            $_SESSION['user_id'] = $row['id'];
+            $_SESSION['user_name'] = $row['full_name'];
+            $_SESSION['user_email'] = $row['email'];
+            $_SESSION['user_role'] = $row['role'];
+
+            // REDIRECT
             header("Location: name.php");
             exit();
 
@@ -35,7 +54,6 @@ if(isset($_POST['login'])){
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>

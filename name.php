@@ -1574,9 +1574,13 @@ body{
 
     </style>
     <!-- CREATE TICKET -->
-<?php { ?>
+    <?php
 
-<h3>Raise Ticket</h3>
+
+;
+?>
+
+<h2>Raise Ticket</h2>
 
 <form method="POST" action="create_ticket.php">
 
@@ -1588,22 +1592,31 @@ body{
         <option value="general">General</option>
     </select>
 
-    <input type="text" name="subject" placeholder="Subject" required>
+    <input
+        type="text"
+        name="subject"
+        placeholder="Subject"
+        required>
 
-    <textarea name="message" placeholder="Message" required></textarea>
+    <textarea
+        name="message"
+        placeholder="Describe your issue..."
+        required></textarea>
 
-    <button type="submit">Submit Ticket</button>
+    <button
+        type="submit"
+        name="submit_ticket">
+        Submit Ticket
+    </button>
+
 </form>
-
-<?php } ?>
 
 <hr>
 
-<!-- VIEW TICKETS -->
+<h2>My Tickets</h2>
 
-<h3>My Tickets</h3>
+<table border="1" width="100%">
 
-<table>
 <tr>
     <th>Type</th>
     <th>Subject</th>
@@ -1612,33 +1625,28 @@ body{
 </tr>
 
 <?php
-$result = mysqli_query($conn, "
-    SELECT * FROM tickets
-    WHERE user_id='$user_id'
-    ORDER BY created_at DESC
+
+$result = mysqli_query($conn,"
+SELECT *
+FROM tickets
+WHERE user_id='$user_id'
+ORDER BY id DESC
 ");
 
-while($row = mysqli_fetch_assoc($result)) {
+while($row=mysqli_fetch_assoc($result))
+{
 ?>
 
 <tr>
+
     <td><?= $row['type'] ?></td>
+
     <td><?= $row['subject'] ?></td>
 
-    <td>
-        <?php
-            if($row['status']=='open')
-                echo "<span class='status-open'>🟡 Open</span>";
-            elseif($row['status']=='in_progress')
-                echo "<span class='status-progress'>🔵 In Progress</span>";
-            elseif($row['status']=='resolved')
-                echo "<span class='status-resolved'>🟢 Resolved</span>";
-            else
-                echo "<span class='status-closed'>⚫ Closed</span>";
-        ?>
-    </td>
+    <td><?= strtoupper($row['status']) ?></td>
 
     <td><?= $row['created_at'] ?></td>
+
 </tr>
 
 <?php } ?>

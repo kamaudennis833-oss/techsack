@@ -4,44 +4,34 @@ include "db.php";
 
 $error = "";
 
+/* =========================
+   LOGIN HANDLER
+========================= */
 if(isset($_POST['login'])){
 
     $email = trim($_POST['email']);
     $password = $_POST['password'];
 
-    // 1. GET USER FROM users TABLE
-    $stmt = $conn->prepare("
-        SELECT * 
-        FROM users 
-        WHERE email=?
-        LIMIT 1
-    ");
+    $stmt = $conn->prepare("SELECT * FROM users WHERE email=? LIMIT 1");
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $result = $stmt->get_result();
 
     if($row = $result->fetch_assoc()){
 
-        // 2. CHECK IF ACCOUNT IS VERIFIED
         if($row['is_verified'] != 1){
             $error = "Please verify your email first.";
         }
-
-        // 3. CHECK STATUS
         else if($row['status'] != "active"){
             $error = "Your account is not active.";
         }
-
-        // 4. PASSWORD VERIFY (IMPORTANT FIX)
         else if(password_verify($password, $row['password'])){
 
-            // SESSION (FIXED NAMES)
             $_SESSION['user_id'] = $row['id'];
             $_SESSION['user_name'] = $row['full_name'];
             $_SESSION['user_email'] = $row['email'];
             $_SESSION['user_role'] = $row['role'];
 
-            // REDIRECT
             header("Location: name.php");
             exit();
 
@@ -53,45 +43,90 @@ if(isset($_POST['login'])){
         $error = "User not found!";
     }
 }
+
+
+/* =========================
+   FORGOT PASSWORD HANDLER
+========================= */
+$reset_msg = "";
+
+if(isset($_POST['email']) && isset($_POST['new_password'])){
+
+    $email = trim($_POST['email']);
+    $new_password_raw = $_POST['new_password'];
+
+    // CHECK USER EXISTS
+    $check = $conn->prepare("SELECT id, is_verified, status FROM users WHERE email=? LIMIT 1");
+    $check->bind_param("s", $email);
+    $check->execute();
+    $result = $check->get_result();
+
+    if($user = $result->fetch_assoc()){
+
+        if($user['is_verified'] != 1){
+            $reset_msg = "Account not verified. Cannot reset password.";
+        }
+        else if($user['status'] != "active"){
+            $reset_msg = "Account not active. Cannot reset password.";
+        }
+        else {
+
+            $hashedPassword = password_hash($new_password_raw, PASSWORD_DEFAULT);
+
+            $update = $conn->prepare("UPDATE users SET password=? WHERE email=?");
+            $update->bind_param("ss", $hashedPassword, $email);
+
+            if($update->execute() && $update->affected_rows > 0){
+                $reset_msg = "Password reset successful. You can now login.";
+            } else {
+                $reset_msg = "Password reset failed.";
+            }
+        }
+
+    } else {
+        $reset_msg = "User not found!";
+    }
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Student Login</title>
+<title>Login System</title>
 
 <style>
 body{
     margin:0;
-    font-family: Arial, sans-serif;
-    background: linear-gradient(to right, cornsilk, rgb(7, 7, 7));
-    height: 100vh;
+    font-family: Arial;
+    background: linear-gradient(to right, cornsilk, black);
+    height:100vh;
     display:flex;
     justify-content:center;
     align-items:center;
 }
 
+/* LOGIN BOX */
 .login-1{
     display:flex;
     background:white;
+    width:1100px;
+    height:90vh;
     border-radius:15px;
     overflow:hidden;
-    box-shadow:0 10px 25px rgba(0,0,0,0.2);
-    width:1200px;
-    height:95vh;
+    box-shadow:0 10px 25px rgba(0,0,0,0.3);
 }
 
 form{
     flex:0.4;
-    padding:50px;
+    padding:30px;
     display:flex;
     flex-direction:column;
-    gap:12px;
     justify-content:center;
+    gap:20px;
+    line-height:1.2;
+    
 }
-
-label{ font-weight:bold; }
 
 input{
     padding:12px;
@@ -116,11 +151,14 @@ button[type="button"]{
     color:white;
 }
 
+.error{
+    color:red;
+    font-weight:bold;
+}
+
+/* IMAGE */
 .image-box{
     flex:0.6;
-    display:flex;
-    justify-content:center;
-    align-items:center;
 }
 
 .image-box img{
@@ -129,283 +167,120 @@ button[type="button"]{
     object-fit:cover;
 }
 
-.error{
-    color:red;
-    font-weight:bold;
+/* MODAL */
+.modal{
+    display:none;
+    position:fixed;
+    top:0;
+    left:0;
+    width:100%;
+    height:100%;
+    background:rgba(0,0,0,0.6);
+    justify-content:center;
+    align-items:center;
 }
 
-.register-link{
-    margin-top:10px;
+.modal-content{
+    background:white;
+    padding:25px;
+    width:320px;
+    border-radius:12px;
+    position:relative;
     text-align:center;
-    font-size:14px;
 }
 
-.register-link a{
-    color:blue;
-    text-decoration:none;
-    font-weight:bold;
+.close{
+    position:absolute;
+    right:10px;
+    top:5px;
+    font-size:22px;
+    cursor:pointer;
+}
+
+.modal-content input{
+    width:100%;
+    padding:10px;
+    margin:8px 0;
+    border:1px solid #ccc;
+    border-radius:8px;
+}
+
+.modal-content button{
+    width:100%;
+    background:orange;
+    color:white;
 }
 </style>
 </head>
 
 <body>
 
-<section>
 <div class="login-1">
 
+<!-- LOGIN FORM -->
 <form method="POST">
 
-    <h2>Student Login</h2>
+<h2> LMS Login Portal</h2>
 
-    <?php if($error) echo "<p class='error'>$error</p>"; ?>
+<?php if($error) echo "<p class='error'>$error</p>"; ?>
 
-    <label>Email</label>
-    <input type="email" name="email" required>
+<label>Email</label>
+<input type="email" name="email" required>
 
-    <label>Password</label>
-    <input type="password" name="password" required>
+<label>Password</label>
+<input type="password" name="password" required>
 
-    <button type="submit" name="login">Login</button>
+<button type="submit" name="login">Login</button>
 
-    <button type="button">Forgot Password</button>
-
-    <div class="register-link">
-        Don't have an account?
-        <a href="register.php">Create Account</a>
-    </div>
+<button type="button" onclick="openModal()">Forgot Password</button>
 
 </form>
 
+<!-- IMAGE -->
 <div class="image-box">
-    <img src="webpage.jpg" alt="login image">
+    <img src="webpage.jpg">
 </div>
 
 </div>
-</section>
 
-</body>
-</html>
+<!-- RESET MODAL -->
+<div id="forgotModal" class="modal">
+  <div class="modal-content">
 
+    <span class="close" onclick="closeModal()">&times;</span>
 
+    <h3>Reset Password</h3>
 
+    <?php if($reset_msg) echo "<p>$reset_msg</p>"; ?>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-
-
-
-session_start();
-include "db.php";
-
-$error = "";
-
-if(isset($_POST['login'])){
-
-    $email = trim($_POST['email']);
-    $password = $_POST['password'];
-
-    $stmt = $conn->prepare("SELECT * FROM students WHERE email=?");
-    $stmt->bind_param("s",$email);
-    $stmt->execute();
-    $result = $stmt->get_result();
-
-    if($row = $result->fetch_assoc()){
-
-        if(password_verify($password, $row['password'])){
-
-            $_SESSION['student_id'] = $row['id'];
-            $_SESSION['student_name'] = $row['full_name'];
-            $_SESSION['student_email'] = $row['email'];
-
-            header("Location: student.php");
-            exit();
-
-        } else {
-            $error = "Invalid password!";
-        }
-
-    } else {
-        $error = "User not found!";
-    }
-}
-----
-
-<!--DOCTYPE html
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Student Login</title>
-
-<style>
-body{
-    margin:0;
-    font-family: Arial, sans-serif;
-    background: linear-gradient(to right, cornsilk, rgb(7, 7, 7));
-    height: 100vh;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-}
-
-.login-1{
-    display:flex;
-    background:white;
-    border-radius:15px;
-    overflow:hidden;
-    box-shadow:0 10px 25px rgba(0,0,0,0.2);
-    width:1200px;
-    height:95vh;
-}
-
-form{
-    flex:0.4;
-    padding:50px;
-    display:flex;
-    flex-direction:column;
-    gap:12px;
-    justify-content:center;
-}
-
-label{
-    font-weight:bold;
-}
-
-input{
-    padding:12px;
-    border:1px solid #ccc;
-    border-radius:8px;
-}
-
-button{
-    padding:12px;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-}
-
-button[type="submit"]{
-    background:green;
-    color:white;
-}
-
-button[type="button"]{
-    background:orange;
-    color:white;
-}
-
-.image-box{
-    flex:0.6;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-}
-
-.image-box img{
-    width:100%;
-    height:100%;
-    object-fit:cover;
-}
-
-.error{
-    color:red;
-    font-weight:bold;
-}
-
-/* REGISTER LINK */
-.register-link{
-    margin-top:10px;
-    text-align:center;
-    font-size:14px;
-}
-
-.register-link a{
-    color:blue;
-    text-decoration:none;
-    font-weight:bold;
-}
-
-.register-link a:hover{
-    text-decoration:underline;
-}
-</style>
-</head>
-
-<body>
-
-<section>
-<div class="login-1">
-
-    <!-- FORM --
     <form method="POST">
 
-        <h2>Student Login</h2>
-
-        ?php if($error) echo "<p class='error'>$error</p>"; ?>
-
-        <label>Email</label>
         <input type="email" name="email" placeholder="Enter Email" required>
+        <input type="password" name="new_password" placeholder="New Password" required>
 
-        <label>Password</label>
-        <input type="password" name="password" placeholder="Enter Password" required>
-
-        <button type="submit" name="login">Login</button>
-
-        <button type="button">Forgot Password</button>
-
-        <!-- REGISTER LINK --
-        <div class="register-link">
-            Don't have an account?
-            <a href="register.php">Create Account</a>
-        </div>
+        <button type="submit">Reset</button>
 
     </form>
 
-    <!-- IMAGE --
-    <div class="image-box">
-        <img src="webpage.jpg" alt="login image">
-    </div>
-
+  </div>
 </div>
-</section>
+
+<script>
+function openModal(){
+    document.getElementById("forgotModal").style.display = "flex";
+}
+
+function closeModal(){
+    document.getElementById("forgotModal").style.display = "none";
+}
+
+window.onclick = function(e){
+    let modal = document.getElementById("forgotModal");
+    if(e.target == modal){
+        modal.style.display = "none";
+    }
+}
+</script>
 
 </body>
 </html>

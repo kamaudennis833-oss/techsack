@@ -135,77 +135,132 @@ if(!$notifications){
 
 /*  USER PROFILE  */
 
-$user_id = $_SESSION['user_id'] ?? 1;
+/* =========================
+   GET USER PROFILE
+========================= */
 
-$profile_query = mysqli_query($conn,
-"SELECT * FROM users WHERE id='$user_id' LIMIT 1"
-);
+$user_id = isset($_SESSION['user_id'])
+    ? (int)$_SESSION['user_id']
+    : 1; // remove fallback in production
 
-$profile = mysqli_fetch_assoc($profile_query);
+$stmt = $conn->prepare("
+    SELECT *
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+");
 
-/*  FALLBACK */
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
 
-if(!$profile){
+$profile = $stmt->get_result()->fetch_assoc();
+
+/* FALLBACK */
+
+if (!$profile) {
 
     $profile = [
-        'full_name' => 'Unknown User',
-        'email' => 'No Email',
-        'phone' => 'No Phone',
-        'location' => 'No Location',
-        'bio' => 'No bio added yet.',
-        'created_at' => date('Y-m-d'),
-        'profile_image' => ''
+        'full_name'   => 'Unknown User',
+        'email'       => '',
+        'phone'       => '',
+        'location'    => '',
+        'bio'         => '',
+        'created_at'  => date('Y-m-d')
     ];
 }
-/* UPDATED USER PROFILE */
 
-if(isset($_POST['update_profile']))
-    {
-        $full_name = trim($_POST['full_name']);
-        $email     = trim($_POST['email']);
-        $phone     = trim($_POST['phone']);
-        $location  = trim($_POST['location']);
-        $bio       = trim($_POST['bio']);
-    
-        $student_id = $_SESSION['student_id'];
-    
-        $photo_sql = "";
-    
-        if(!empty($_FILES['photo']['name']))
-        {
-            $photo = time().'_'.$_FILES['photo']['name'];
-    
-            move_uploaded_file(
-                $_FILES['photo']['tmp_name'],
-                "uploads/".$photo
-            );
-    
-            $photo_sql = ", profile_photo='$photo'";
-        }
-    
-        $sql = "
-        UPDATE students
-        SET
-            full_name='$full_name',
-            email='$email',
-            phone='$phone',
-            location='$location',
-            bio='$bio'
-            $photo_sql
-        WHERE id='$student_id'
-        ";
-    
-        if(mysqli_query($conn,$sql))
-        {
-            echo "
-            <script>
-                alert('Profile updated successfully');
-                window.location.href=window.location.href;
-            </script>
-            ";
-        }
+/* =========================
+   UPDATE PROFILE
+========================= */
+
+if (isset($_POST['update_profile']))
+{
+    if (!isset($_SESSION['user_id'])) {
+        die("Please login first.");
     }
 
+    $user_id = (int)$_SESSION['user_id'];
+
+    $full_name = trim($_POST['full_name'] ?? '');
+    $email     = trim($_POST['email'] ?? '');
+    $phone     = trim($_POST['phone'] ?? '');
+    $location  = trim($_POST['location'] ?? '');
+    $bio       = trim($_POST['bio'] ?? '');
+
+    /* =========================
+       UPDATE USERS TABLE
+    ========================= */
+
+    $stmt = $conn->prepare("
+        UPDATE users
+        SET
+            full_name = ?,
+            email = ?,
+            phone = ?,
+            location = ?,
+            bio = ?
+        WHERE id = ?
+    ");
+
+    $stmt->bind_param(
+        "sssssi",
+        $full_name,
+        $email,
+        $phone,
+        $location,
+        $bio,
+        $user_id
+    );
+
+    $stmt->execute();
+
+    /* =========================
+       UPDATE STUDENTS TABLE
+    ========================= */
+
+    $stmt = $conn->prepare("
+        UPDATE students
+        SET
+            full_name = ?,
+            email = ?,
+            phone = ?
+        WHERE user_id = ?
+    ");
+
+    $stmt->bind_param(
+        "sssi",
+        $full_name,
+        $email,
+        $phone,
+        $user_id
+    );
+
+    $stmt->execute();
+
+    /* =========================
+       REFRESH PROFILE DATA
+    ========================= */
+
+    $stmt = $conn->prepare("
+        SELECT *
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+    ");
+
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+
+    $profile = $stmt->get_result()->fetch_assoc();
+
+    echo "
+<script>
+    alert('Profile updated successfully');
+    window.location.href='name.php?section=profile';
+</script>
+";
+exit;
+}
 /*  ENROLLED COURSES COUNT  */
 
 $total_courses = mysqli_fetch_assoc(mysqli_query($conn,
@@ -276,12 +331,13 @@ ORDER BY enrollments.completed_at DESC"
 /*  ASSIGNMENTS */
 
 $assignments = mysqli_query($conn,
-"SELECT * FROM assignments
-WHERE user_id='$user_id'
-ORDER BY due_date ASC
+"SELECT a.*
+FROM assignments a
+INNER JOIN enrollments e ON e.course_id = a.course_id
+WHERE e.user_id = '$user_id'
+ORDER BY a.due_date ASC
 LIMIT 10"
 );
-
 /*  COURSE MATERIALS  */
 
 $materials = mysqli_query($conn,
@@ -1382,7 +1438,7 @@ body{
         <li><a href="#" onclick="showRaiseTicket()"><i class="fas fa-ticket-alt"></i>Raise Ticket</a></li>
         <li><a href="#" onclick="showProfile()"><i class="fas fa-user"></i>Profile</a></li>
         <li><a href="#" onclick="showSettings()"><i class="fas fa-cog"></i>Settings</a></li>
-        <li class="logout"><a href="logout.php"><i class="fas fa-sign-out-alt"></i>Logout</a></li>
+        <li class="logout"><a href="Login.php"><i class="fas fa-sign-out-alt"></i>Logout</a></li>
     </ul>
 </div>
 
@@ -1676,10 +1732,6 @@ while($row=mysqli_fetch_assoc($result))
 
         </div>
 
-        <a href="browse_courses.php" class="btn">
-            <i class="fas fa-plus"></i>
-            Enroll New Course
-        </a>
 
     </div>
 
@@ -3502,7 +3554,7 @@ while($row = mysqli_fetch_assoc($result)) {
 
     <!--  ACTION BUTTONS  -->
 
-    <div class="profile-actions">
+<div class="profile-actions">
 
 <!-- UPDATE PROFILE -->
 <button class="action-btn primary"

@@ -6,54 +6,101 @@ include "sendmail.php";
 
 $error = "";
 
-if(isset($_POST['register'])){
+if (isset($_POST['register'])) {
 
-    // CLEAN INPUTS (IMPORTANT FIX)
+    // ======================
+    // INPUTS
+    // ======================
     $name = trim($_POST['full_name']);
     $email = strtolower(trim($_POST['email']));
     $phone = trim($_POST['phone']);
     $passwordRaw = $_POST['password'];
 
-    if(empty($name) || empty($email) || empty($phone) || empty($passwordRaw)){
+    // ======================
+    // VALIDATION
+    // ======================
+    if (
+        empty($name) ||
+        empty($email) ||
+        empty($phone) ||
+        empty($passwordRaw)
+    ) {
         $error = "All fields are required!";
-    } else {
+    }
+    elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $error = "Invalid email address!";
+    }
+    else {
 
-        // 1. CHECK IF USER ALREADY EXISTS (FINAL TABLE)
+        // ======================
+        // CHECK EXISTS (EMAIL / PHONE)
+        // ======================
         $check = $conn->prepare("
-            SELECT id FROM users 
+            SELECT email, phone
+            FROM users
             WHERE email=? OR phone=?
+            LIMIT 1
         ");
+
         $check->bind_param("ss", $email, $phone);
         $check->execute();
-        $check->store_result();
+        $result = $check->get_result();
 
-        if($check->num_rows > 0){
-            $error = "User already registered!";
+        if ($row = $result->fetch_assoc()) {
+
+            if ($row['email'] === $email && $row['phone'] === $phone) {
+                $error = "Email and Phone already exist!";
+            }
+            elseif ($row['email'] === $email) {
+                $error = "Email already exists!";
+            }
+            elseif ($row['phone'] === $phone) {
+                $error = "Phone number already exists!";
+            }
+
+            $check->close();
+
         } else {
 
             $check->close();
 
-            // 2. DELETE OLD PENDING OTP (IMPORTANT FIX)
-            $del = $conn->prepare("
-                DELETE FROM pending_students 
+            // ======================
+            // REMOVE OLD OTP RECORD
+            // ======================
+            $delete = $conn->prepare("
+                DELETE FROM pending_students
                 WHERE email=?
             ");
-            $del->bind_param("s", $email);
-            $del->execute();
-            $del->close();
+            $delete->bind_param("s", $email);
+            $delete->execute();
+            $delete->close();
 
-            // 3. HASH PASSWORD
+            // ======================
+            // PASSWORD HASH
+            // ======================
             $passwordHash = password_hash($passwordRaw, PASSWORD_DEFAULT);
 
-            // 4. OTP + EXPIRY
+            // ======================
+            // OTP
+            // ======================
             $otp = random_int(100000, 999999);
             $otp_created = date("Y-m-d H:i:s");
             $otp_expires = date("Y-m-d H:i:s", strtotime("+10 minutes"));
 
-            // 5. INSERT PENDING USER
+            // ======================
+            // INSERT TEMP USER
+            // ======================
             $stmt = $conn->prepare("
                 INSERT INTO pending_students
-                (full_name, email, phone, password, otp, otp_created, otp_expires)
+                (
+                    full_name,
+                    email,
+                    phone,
+                    password,
+                    otp,
+                    otp_created,
+                    otp_expires
+                )
                 VALUES (?,?,?,?,?,?,?)
             ");
 
@@ -68,27 +115,34 @@ if(isset($_POST['register'])){
                 $otp_expires
             );
 
-            if($stmt->execute()){
+            if ($stmt->execute()) {
 
-                // 6. SEND OTP
-                if(sendOTP($email, $otp)){
+                // ======================
+                // SEND OTP EMAIL
+                // ======================
+                if (sendOTP($email, $name, $otp)) {
+
                     header("Location: verify.php?email=" . urlencode($email));
                     exit();
+
                 } else {
-                    $error = "OTP email failed. Check mail server.";
+                    $error = "Failed to send OTP email.";
                 }
 
             } else {
-                $error = "Registration failed. Try again.";
+                $error = "Registration failed: " . $stmt->error;
             }
+
+            $stmt->close();
         }
     }
 }
 ?>
+
 <!DOCTYPE html>
 <html>
 <head>
-<title>Student Registration</title>
+<title>Register</title>
 
 <style>
 body{
@@ -98,28 +152,27 @@ body{
     display:flex;
     justify-content:center;
     align-items:center;
-    background:linear-gradient(-45deg, cornsilk, chartreuse, #00c9ff, #92fe9d);
+    background:linear-gradient(-45deg,#00c9ff,#92fe9d,#f093fb,#f5576c);
     background-size:400% 400%;
     animation:bg 10s infinite;
 }
 
 @keyframes bg{
-    0%{background-position:0% 50%}
-    50%{background-position:100% 50%}
-    100%{background-position:0% 50%}
+    0%{background-position:0% 50%;}
+    50%{background-position:100% 50%;}
+    100%{background-position:0% 50%;}
 }
 
 .box{
     width:420px;
-    background:white;
+    background:#fff;
     padding:30px;
     border-radius:12px;
-    box-shadow:0 10px 25px rgba(0,0,0,0.2);
+    box-shadow:0 10px 25px rgba(0,0,0,.2);
 }
 
 h2{
     text-align:center;
-    margin-bottom:20px;
 }
 
 input{
@@ -135,7 +188,7 @@ button{
     padding:12px;
     margin-top:10px;
     background:green;
-    color:white;
+    color:#fff;
     border:none;
     border-radius:8px;
     cursor:pointer;
@@ -151,37 +204,34 @@ button:hover{
     text-align:center;
     margin-bottom:10px;
 }
-
-.login-link{
-    margin-top: 15px;
-    text-align:center;
-}
 </style>
-</head>
 
+</head>
 <body>
 
 <div class="box">
 
-<h2>Student Registration</h2>
+<h2>Create Account</h2>
 
-<?php if($error) echo "<div class='error'>$error</div>"; ?>
+<?php if(!empty($error)){ ?>
+<div class="error">
+    <?php echo htmlspecialchars($error); ?>
+</div>
+<?php } ?>
 
 <form method="POST">
 
     <input type="text" name="full_name" placeholder="Full Name" required>
+
     <input type="email" name="email" placeholder="Email Address" required>
+
     <input type="text" name="phone" placeholder="Phone Number" required>
+
     <input type="password" name="password" placeholder="Password" required>
 
     <button type="submit" name="register">Create Account</button>
 
 </form>
-
-<div class="login-link">
-    You already have an account?
-    <a href="login.php">Login</a>
-</div>
 
 </div>
 

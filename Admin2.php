@@ -7,14 +7,14 @@ include "db.php";
  */
 
 // Total Students
-$total_students = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total FROM students"))['total'] ?? 0;
+$total_users = mysqli_fetch_assoc(mysqli_query($conn,
+"SELECT COUNT(*) AS total FROM users"))['total'] ?? 0;
 
 // Active Students
 $active_students = 0;
 
 $result = mysqli_query($conn,
-"SELECT COUNT(*) AS total FROM students WHERE status='active'");
+"SELECT COUNT(*) AS total FROM users WHERE status='active'");
 
 if ($row = mysqli_fetch_assoc($result)) {
     $active_students = $row['total'];
@@ -80,7 +80,7 @@ $popular_courses = mysqli_query($conn,
 "SELECT 
     courses.id,
     courses.title,
-    COUNT(enrollments.id) AS students,
+    COUNT(enrollments.id) AS users,
     COALESCE(SUM(payments.amount),0) AS revenue,
     COALESCE(AVG(enrollments.progress),0) AS completion_rate
 
@@ -95,7 +95,7 @@ LEFT JOIN payments
 
 GROUP BY courses.id, courses.title
 
-ORDER BY students DESC
+ORDER BY users DESC
 LIMIT 5"
 );
 
@@ -246,24 +246,24 @@ if(isset($_POST['upload_material'])){
 /* student  */ 
 if(isset($_POST['student_action'])){
 
-    $student_id = $_POST['student_id'];
+    $student_id = $_POST['user_id'];
     $action = $_POST['action'];
 
     if($action == "activate"){
-        mysqli_query($conn, "UPDATE students SET status='active' WHERE id='$student_id'");
+        mysqli_query($conn, "UPDATE users SET status='active' WHERE id='$user_id'");
     }
 
     if($action == "suspend"){
-        mysqli_query($conn, "UPDATE students SET status='suspended' WHERE id='$student_id'");
+        mysqli_query($conn, "UPDATE users SET status='suspended' WHERE id='$user_id'");
     }
 
     if($action == "delete"){
-        mysqli_query($conn, "DELETE FROM students WHERE id='$student_id'");
+        mysqli_query($conn, "DELETE FROM users WHERE id='$user_id'");
     }
 
     if($action == "reset_password"){
         $newPass = password_hash("123456", PASSWORD_DEFAULT);
-        mysqli_query($conn, "UPDATE students SET password='$newPass' WHERE id='$student_id'");
+        mysqli_query($conn, "UPDATE users SET password='$newPass' WHERE id='$user_id'");
     }
 
 }
@@ -307,7 +307,7 @@ if(isset($_POST['enroll_action'])){
 /* FETCH DATA  */
 
 $students = mysqli_query($conn, "
-    SELECT * FROM students 
+    SELECT * FROM users 
     ORDER BY id DESC
 ");
 
@@ -369,8 +369,6 @@ if(isset($_POST['create_course'])){
 
     $stmt->execute();
 
-    header("Location: courses.php");
-    exit;
 }
 
 /*  HANDLE DELETE / ARCHIVE  */
@@ -385,8 +383,6 @@ if(isset($_POST['delete_course'])){
         mysqli_query($conn, "UPDATE courses SET status='archived' WHERE id='$id'");
     }
 
-    header("Location: courses.php");
-    exit;
 }
 
 $user_id = $_SESSION['user_id'] ?? 1;
@@ -939,7 +935,6 @@ $payments = mysqli_query($conn,
 
 /* ANNOUNCEMENT */
 
-$teacher_id = 1;
 /* 
    CREATE ANNOUNCEMENT
  */
@@ -989,6 +984,137 @@ JOIN courses c ON c.id = a.course_id
 WHERE a.teacher_id = $teacher_id
 ORDER BY a.created_at DESC
 ");
+
+/* ROLE */
+date_default_timezone_set("Africa/Nairobi");
+include "sendmail1.php";
+
+$message = "";
+$messageType = "";
+
+if (isset($_POST['add_teacher'])) {
+
+    // =========================
+    // INPUTS
+    // =========================
+    $full_name = trim($_POST['full_name']);
+    $email = strtolower(trim($_POST['email']));
+    $phone = trim($_POST['phone'] ?? '');
+    $password = $_POST['password'];
+
+    $employee_no = trim($_POST['employee_no'] ?? '');
+    $specialization = trim($_POST['specialization'] ?? '');
+    $qualification = trim($_POST['qualification'] ?? '');
+    $experience_years = (int)($_POST['experience_years'] ?? 0);
+
+    // =========================
+    // VALIDATION
+    // =========================
+    if (empty($full_name) || empty($email) || empty($password)) {
+        $message = "Full name, email and password are required!";
+        $messageType = "error";
+    } else {
+
+        // =========================
+        // CHECK DUPLICATE EMAIL
+        // =========================
+        $check = $conn->prepare("SELECT id FROM pending_teachers WHERE email=?");
+        $check->bind_param("s", $email);
+        $check->execute();
+        $check->store_result();
+
+        if ($check->num_rows > 0) {
+
+            $message = "Email already exists!";
+            $messageType = "error";
+
+        } else {
+
+            // =========================
+            // GET ROLE ID
+            // =========================
+            $role_name = "teacher";
+            $role_stmt = $conn->prepare("SELECT id FROM roles WHERE role_name=?");
+            $role_stmt->bind_param("s", $role_name);
+            $role_stmt->execute();
+            $role_result = $role_stmt->get_result();
+            $role_data = $role_result->fetch_assoc();
+
+            if (!$role_data) {
+
+                $message = "Role 'teacher' not found in roles table!";
+                $messageType = "error";
+
+            } else {
+
+                $role_id = $role_data['id'];
+
+                // =========================
+                // OTP
+                // =========================
+                $otp = rand(100000, 999999);
+                $expiry = date("Y-m-d H:i:s", strtotime("+10 minutes"));
+
+                // =========================
+                // HASH PASSWORD
+                // =========================
+                $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+
+                // =========================
+                // INSERT TEACHER
+                // =========================
+                $stmt = $conn->prepare("
+                    INSERT INTO pending_teachers
+                    (
+                        full_name,
+                        email,
+                        phone,
+                        password,
+                        role_id,
+                        employee_no,
+                        specialization,
+                        qualification,
+                        experience_years,
+                        otp,
+                        otp_expires
+                    )
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                ");
+
+                $stmt->bind_param(
+                    "ssssisssiss",
+                    $full_name,
+                    $email,
+                    $phone,
+                    $hashedPassword,
+                    $role_id,
+                    $employee_no,
+                    $specialization,
+                    $qualification,
+                    $experience_years,
+                    $otp,
+                    $expiry
+                );
+
+                if ($stmt->execute()) {
+
+                    // =========================
+                    // SEND OTP EMAIL
+                    // =========================
+                    sendOTP($email, $full_name, $otp);
+
+                    header("Location: verify2.php?email=" . urlencode($email));
+                    exit;
+
+                } else {
+                    $message = "Database error: " . $stmt->error;
+                    $messageType = "error";
+                }
+            }
+        }
+    }
+}
+
 ?>
 
 
@@ -1558,6 +1684,12 @@ table tbody tr:hover{
                     <span>Courses</span>
                 </a>
             </li>
+            <li>
+                <a href="#" onclick="showRole()">
+                    <i class="fas fa-lock"></i>
+                    <span>Role</span>
+                </a>
+            </li>
 
             <li>
                 <a href="#" onclick="showVideos()">
@@ -1600,6 +1732,7 @@ table tbody tr:hover{
                     <span>Analytics</span>
                 </a>
             </li>
+            
 
             <li>
                 <a href="#" onclick="showNotifications()">
@@ -1623,7 +1756,7 @@ table tbody tr:hover{
             </li>
 
             <li>
-                <a href="#">
+                <a href="login.php">
                     <i class="fas fa-sign-out-alt"></i>
                     <span>Logout</span>
                 </a>
@@ -1667,7 +1800,7 @@ table tbody tr:hover{
             <div class="icon students">
                 <i class="fas fa-user-graduate"></i>
             </div>
-            <h3><?= $total_students ?></h3>
+            <h3><?= $total_users ?></h3>
             <p>Total Students</p>
         </div>
 
@@ -1823,7 +1956,7 @@ table tbody tr:hover{
 
                     <td><?= $course['title'] ?></td>
 
-                    <td><?= $course['students'] ?></td>
+                    <td><?= $course['users'] ?></td>
 
                     <td>KES <?= number_format($course['revenue']) ?></td>
 
@@ -2029,9 +2162,59 @@ table tbody tr:hover{
 
 </div>
 
+<!--== ROLE --> 
+<div class="box" id="roleSection" style="display:none;">
+
+<div class="container">
+<div class="card">
+
+<h2>Add Teacher</h2>
+
+<?php if (!empty($message)) { ?>
+    <div class="<?php echo $messageType; ?>">
+        <?php echo htmlspecialchars($message); ?>
+    </div>
+<?php } ?>
+
+<form method="POST">
+
+    <label>Teacher Name *</label>
+    <input type="text" name="full_name" required>
+
+    <label>Email *</label>
+    <input type="email" name="email" required>
+
+    <label>Password *</label>
+    <input type="password" name="password" required>
+
+    <label>Employee Number</label>
+    <input type="text" name="employee_no">
+
+    <label>Phone Number</label>
+    <input type="text" name="phone">
+
+    <label>Specialization</label>
+    <input type="text" name="specialization">
+
+    <label>Qualification</label>
+    <input type="text" name="qualification">
+
+    <label>Experience Years</label>
+    <input type="number" name="experience_years" min="0">
+
+    <button type="submit" name="add_teacher">Add Teacher</button>
+
+</form>
+
+</div>
+</div>
+</div>
+
+
+
 
 <!-- == COURSE SECTION == -->
-<div class="box" id="courseSection" style="display:none;">
+<div class="box" id="coursesSection" style="display:none;">
 <style>
 body{font-family:Arial;background:#f4f6f9;padding:20px;margin:0}
 .container{max-width:1200px;margin:auto}
@@ -3869,18 +4052,20 @@ select{
 </div>
 
 <script>
- function hideAllSections(){
+function hideAllSections(){
 
 let sections = [
     "dashboardSection",
     "studentsSection",
-    "courseSection",
+    "coursesSection",
     "videoSection",
     "noteSection",
     "enrollmentSection",
     "paymentSection",
     "announcementSection",
-    "ticketSection"
+    "ticketSection",
+    "quizeSection",
+    "roleSection"
 ];
 
 sections.forEach(id => {
@@ -3894,6 +4079,10 @@ sections.forEach(id => {
 });
 }
 
+function showRole(){
+hideAllSections();
+document.getElementById("roleSection").style.display = "block";
+}
 function showStudent(){
 hideAllSections();
 document.getElementById("studentsSection").style.display = "block";
@@ -3905,7 +4094,7 @@ document.getElementById("dashboardSection").style.display = "block";
 }
 function showCourse(){
     hideAllSections();
-    document.getElementById("courseSection").style.display="block";
+    document.getElementById("coursesSection").style.display="block";
 }
 function showVideos(){
     hideAllSections();

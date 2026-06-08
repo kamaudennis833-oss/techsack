@@ -18,12 +18,14 @@ if(isset($_POST['verify'])){
     $otp = preg_replace('/\s+/', '', $otp);
 
     if(!preg_match('/^[0-9]{6}$/', $otp)){
+
         $msg = "OTP must be 6 digits.";
+
     } else {
 
-        // 1. CHECK OTP FROM pending_students
+        // CHECK OTP
         $stmt = $conn->prepare("
-            SELECT * 
+            SELECT *
             FROM pending_students
             WHERE email=?
             AND otp=?
@@ -34,84 +36,139 @@ if(isset($_POST['verify'])){
 
         $stmt->bind_param("ss", $email, $otp);
         $stmt->execute();
+
         $result = $stmt->get_result();
 
         if($row = $result->fetch_assoc()){
 
-            // 2. CHECK IF USER ALREADY EXISTS IN users TABLE
-            $check = $conn->prepare("SELECT id FROM users WHERE email=?");
-            $check->bind_param("s", $email);
-            $check->execute();
-            $check->store_result();
+            // VALIDATE ROLE
+            $allowedRoles = ['student','teacher','admin'];
 
-            if($check->num_rows > 0){
-                $msg = "Account already exists. Please login.";
-            } else {
+            if(!in_array($row['role'], $allowedRoles)){
+                $msg = "Invalid account role.";
+            }
+            else{
 
-                // 3. CREATE FINAL USER ACCOUNT
-                $insert = $conn->prepare("
-                    INSERT INTO users
-                    (full_name, email, phone, password, is_verified, status)
-                    VALUES (?,?,?,?,1,'active')
+                // CHECK IF USER ALREADY EXISTS
+                $check = $conn->prepare("
+                    SELECT id
+                    FROM users
+                    WHERE email=?
+                    LIMIT 1
                 ");
 
-                $insert->bind_param(
-                    "ssss",
-                    $row['full_name'],
-                    $row['email'],
-                    $row['phone'],
-                    $row['password']
-                );
+                $check->bind_param("s", $email);
+                $check->execute();
+                $check->store_result();
 
-                if($insert->execute()){
+                if($check->num_rows > 0){
 
-                    // 4. MARK OTP VERIFIED
-                    $update = $conn->prepare("
-                        UPDATE pending_students
-                        SET otp_verified=1
-                        WHERE id=?
-                    ");
-                    $update->bind_param("i", $row['id']);
-                    $update->execute();
-
-                    // 5. DELETE TEMP RECORD
-                    $delete = $conn->prepare("
-                        DELETE FROM pending_students
-                        WHERE id=?
-                    ");
-                    $delete->bind_param("i", $row['id']);
-                    $delete->execute();
-
-                    // 6. SESSION LOGIN
-                    $_SESSION['user_email'] = $row['email'];
-                    $_SESSION['user_name'] = $row['full_name'];
-
-                    $success = true;
-
-                    // OPTIONAL: redirect after success
-                    header("refresh:3;url=login.php");
+                    $msg = "Account already exists. Please login.";
 
                 } else {
-                    $msg = "Failed to create account.";
+
+                    // CREATE VERIFIED ACCOUNT
+                    $insert = $conn->prepare("
+                        INSERT INTO users
+                        (
+                            full_name,
+                            email,
+                            phone,
+                            password,
+                            role,
+                            is_verified,
+                            status
+                        )
+                        VALUES
+                        (
+                            ?, ?, ?, ?, ?, 1, 'active'
+                        )
+                    ");
+
+                    $insert->bind_param(
+                        "sssss",
+                        $row['full_name'],
+                        $row['email'],
+                        $row['phone'],
+                        $row['password'],
+                        $row['role']
+                    );
+
+                    if($insert->execute()){
+
+                        // MARK OTP VERIFIED
+                        $update = $conn->prepare("
+                            UPDATE pending_students
+                            SET otp_verified=1
+                            WHERE id=?
+                        ");
+
+                        $update->bind_param(
+                            "i",
+                            $row['id']
+                        );
+
+                        $update->execute();
+
+                        // DELETE TEMP RECORD
+                        $delete = $conn->prepare("
+                            DELETE FROM pending_students
+                            WHERE id=?
+                        ");
+
+                        $delete->bind_param(
+                            "i",
+                            $row['id']
+                        );
+
+                        $delete->execute();
+
+                        // SESSION
+                        $_SESSION['user_email'] = $row['email'];
+                        $_SESSION['user_name']  = $row['full_name'];
+                        $_SESSION['user_role']  = $row['role'];
+
+                        $success = true;
+
+                        header("refresh:3;url=login.php");
+
+                    } else {
+
+                        $msg = "Failed to create account.";
+
+                    }
                 }
             }
 
         } else {
+
             $msg = "Invalid or expired OTP.";
+
         }
     }
 }
 ?>
 
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>OTP Verification</title>
+
 <style>
+
 body{
     margin:0;
-    font-family:Arial, sans-serif;
+    font-family:Arial,sans-serif;
     height:100vh;
     display:flex;
     justify-content:center;
     align-items:center;
-    background:linear-gradient(to right, cornsilk, chartreuse);
+    background:linear-gradient(
+        to right,
+        cornsilk,
+        chartreuse
+    );
 }
 
 .box{
@@ -161,6 +218,7 @@ button:hover{
     font-weight:bold;
     margin-bottom:15px;
 }
+
 </style>
 </head>
 
@@ -179,8 +237,10 @@ button:hover{
 
     <?php else: ?>
 
-        <?php if($msg): ?>
-            <div class="error"><?= htmlspecialchars($msg) ?></div>
+        <?php if(!empty($msg)): ?>
+            <div class="error">
+                <?= htmlspecialchars($msg) ?>
+            </div>
         <?php endif; ?>
 
         <form method="POST">
@@ -190,9 +250,13 @@ button:hover{
                 name="otp"
                 placeholder="Enter 6-digit OTP"
                 maxlength="6"
-                required>
+                required
+            >
 
-            <button type="submit" name="verify">
+            <button
+                type="submit"
+                name="verify"
+            >
                 Verify Account
             </button>
 

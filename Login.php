@@ -3,37 +3,65 @@ session_start();
 include "db.php";
 
 $error = "";
+$reset_msg = "";
 
 /* =========================
    LOGIN HANDLER
 ========================= */
-if(isset($_POST['login'])){
+if (isset($_POST['login'])) {
 
     $email = trim($_POST['email']);
     $password = $_POST['password'];
 
-    $stmt = $conn->prepare("SELECT * FROM users WHERE email=? LIMIT 1");
+    $stmt = $conn->prepare("
+        SELECT * 
+        FROM users 
+        WHERE email=? 
+        LIMIT 1
+    ");
+
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $result = $stmt->get_result();
 
-    if($row = $result->fetch_assoc()){
+    if ($row = $result->fetch_assoc()) {
 
-        if($row['is_verified'] != 1){
+        // CHECK EMAIL VERIFIED
+        if ($row['is_verified'] != 1) {
             $error = "Please verify your email first.";
         }
-        else if($row['status'] != "active"){
+
+        // CHECK ACCOUNT STATUS
+        elseif ($row['status'] != "active") {
             $error = "Your account is not active.";
         }
-        else if(password_verify($password, $row['password'])){
 
+        // CHECK PASSWORD
+        elseif (password_verify($password, $row['password'])) {
+
+            // =========================
+            // SESSION DATA
+            // =========================
             $_SESSION['user_id'] = $row['id'];
             $_SESSION['user_name'] = $row['full_name'];
             $_SESSION['user_email'] = $row['email'];
             $_SESSION['user_role'] = $row['role'];
 
-            header("Location: name.php");
-            exit();
+            // =========================
+            // ROLE REDIRECT (FIXED)
+            // =========================
+            if ($row['role'] == 'admin') {
+                header("Location: Admin2.php");
+                exit;
+            }
+            elseif ($row['role'] == 'teacher') {
+                header("Location: Teacher.php");
+                exit;
+            }
+            else {
+                header("Location: name.php");
+                exit;
+            }
 
         } else {
             $error = "Invalid password!";
@@ -46,37 +74,45 @@ if(isset($_POST['login'])){
 
 
 /* =========================
-   FORGOT PASSWORD HANDLER
+   FORGOT PASSWORD
 ========================= */
-$reset_msg = "";
-
-if(isset($_POST['email']) && isset($_POST['new_password'])){
+if (isset($_POST['email']) && isset($_POST['new_password'])) {
 
     $email = trim($_POST['email']);
-    $new_password_raw = $_POST['new_password'];
+    $new_password = $_POST['new_password'];
 
-    // CHECK USER EXISTS
-    $check = $conn->prepare("SELECT id, is_verified, status FROM users WHERE email=? LIMIT 1");
+    $check = $conn->prepare("
+        SELECT id, is_verified, status 
+        FROM users 
+        WHERE email=? 
+        LIMIT 1
+    ");
+
     $check->bind_param("s", $email);
     $check->execute();
     $result = $check->get_result();
 
-    if($user = $result->fetch_assoc()){
+    if ($user = $result->fetch_assoc()) {
 
-        if($user['is_verified'] != 1){
-            $reset_msg = "Account not verified. Cannot reset password.";
+        if ($user['is_verified'] != 1) {
+            $reset_msg = "Account not verified.";
         }
-        else if($user['status'] != "active"){
-            $reset_msg = "Account not active. Cannot reset password.";
+        elseif ($user['status'] != "active") {
+            $reset_msg = "Account not active.";
         }
         else {
 
-            $hashedPassword = password_hash($new_password_raw, PASSWORD_DEFAULT);
+            $hashed = password_hash($new_password, PASSWORD_DEFAULT);
 
-            $update = $conn->prepare("UPDATE users SET password=? WHERE email=?");
-            $update->bind_param("ss", $hashedPassword, $email);
+            $update = $conn->prepare("
+                UPDATE users 
+                SET password=? 
+                WHERE email=?
+            ");
 
-            if($update->execute() && $update->affected_rows > 0){
+            $update->bind_param("ss", $hashed, $email);
+
+            if ($update->execute() && $update->affected_rows > 0) {
                 $reset_msg = "Password reset successful. You can now login.";
             } else {
                 $reset_msg = "Password reset failed.";
@@ -106,7 +142,6 @@ body{
     align-items:center;
 }
 
-/* LOGIN BOX */
 .login-1{
     display:flex;
     background:white;
@@ -124,8 +159,6 @@ form{
     flex-direction:column;
     justify-content:center;
     gap:20px;
-    line-height:1.2;
-    
 }
 
 input{
@@ -156,7 +189,6 @@ button[type="button"]{
     font-weight:bold;
 }
 
-/* IMAGE */
 .image-box{
     flex:0.6;
 }
@@ -167,7 +199,17 @@ button[type="button"]{
     object-fit:cover;
 }
 
-/* MODAL */
+.register-link{
+    text-align:center;
+    margin-top:10px;
+}
+
+.register-link a{
+    color:blue;
+    text-decoration:none;
+    font-weight:bold;
+}
+
 .modal{
     display:none;
     position:fixed;
@@ -196,31 +238,17 @@ button[type="button"]{
     font-size:22px;
     cursor:pointer;
 }
-
-.modal-content input{
-    width:100%;
-    padding:10px;
-    margin:8px 0;
-    border:1px solid #ccc;
-    border-radius:8px;
-}
-
-.modal-content button{
-    width:100%;
-    background:orange;
-    color:white;
-}
 </style>
+
 </head>
 
 <body>
 
 <div class="login-1">
 
-<!-- LOGIN FORM -->
 <form method="POST">
 
-<h2> LMS Login Portal</h2>
+<h2>LMS Login Portal</h2>
 
 <?php if($error) echo "<p class='error'>$error</p>"; ?>
 
@@ -234,9 +262,13 @@ button[type="button"]{
 
 <button type="button" onclick="openModal()">Forgot Password</button>
 
+<div class="register-link">
+    Don't have an account?
+    <a href="register.php">Create Account</a>
+</div>
+
 </form>
 
-<!-- IMAGE -->
 <div class="image-box">
     <img src="webpage.jpg">
 </div>

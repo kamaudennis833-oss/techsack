@@ -164,11 +164,7 @@ body{
     display:flex;
     justify-content:center;
     align-items:center;
-    background:linear-gradient(
-        to right,
-        cornsilk,
-        chartreuse
-    );
+    background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e, #00d4ff);
 }
 
 .box{

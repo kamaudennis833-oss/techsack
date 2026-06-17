@@ -1,21 +1,78 @@
 <?php
-
+session_start();
 include "db.php";
 
-/* COURSE ID */
+/* =========================
+   USER
+========================= */
+$user_id = $_SESSION['user_id'] ?? 0;
 
+/* =========================
+   AJAX HANDLER (PROGRESS + REVIEW)
+========================= */
+if (isset($_POST['action'])) {
+
+    /* ===== VIDEO PROGRESS ===== */
+    if ($_POST['action'] === 'save_progress') {
+
+        $content_id = intval($_POST['content_id']);
+        $watched = intval($_POST['watched']);
+
+        if ($user_id && $content_id) {
+
+            $completed = ($watched >= 90) ? 1 : 0;
+
+            mysqli_query($conn, "
+                INSERT INTO video_progress (user_id, content_id, watched_percentage, completed)
+                VALUES ($user_id, $content_id, $watched, $completed)
+                ON DUPLICATE KEY UPDATE
+                    watched_percentage = VALUES(watched_percentage),
+                    completed = VALUES(completed),
+                    updated_at = CURRENT_TIMESTAMP
+            ");
+        }
+        exit;
+    }
+
+    /* ===== REVIEW (RATING + COMMENT) ===== */
+    if ($_POST['action'] === 'add_review') {
+
+        $rating = intval($_POST['rating']);
+        $comment = mysqli_real_escape_string($conn, $_POST['comment']);
+
+        mysqli_query($conn, "
+            INSERT INTO course_reviews (user_id, course_id, rating, review)
+            VALUES ($user_id, $course_id, $rating, '$comment')
+            ON DUPLICATE KEY UPDATE
+                rating = VALUES(rating),
+                review = VALUES(review)
+        ");
+
+        exit;
+    }
+}
+
+/* =========================
+   COURSE ID
+========================= */
 if (!isset($_GET['id']) || empty($_GET['id'])) {
     die("Course not found");
 }
 
-$course_id = (int)$_GET['id'];
+$course_id = intval($_GET['id']);
 
-/* COURSE */
-
-$course_query = mysqli_query(
-    $conn,
-    "SELECT * FROM courses WHERE id='$course_id'"
-);
+/* =========================
+   COURSE
+========================= */
+$course_query = mysqli_query($conn, "
+    SELECT 
+        c.*,
+        u.full_name AS instructor
+    FROM courses c
+    LEFT JOIN teachers t ON t.id = c.teacher_id
+    LEFT JOIN users u ON u.id = t.user_id
+    WHERE c.id = $course_id
+");
 
 if (!$course_query || mysqli_num_rows($course_query) == 0) {
     die("Course not found");
@@ -23,46 +80,54 @@ if (!$course_query || mysqli_num_rows($course_query) == 0) {
 
 $course = mysqli_fetch_assoc($course_query);
 
-/* PUBLIC PAGE */
+/* =========================
+   PROGRESS (REAL)
+========================= */
+$progress_query = mysqli_query($conn, "
+    SELECT IFNULL(AVG(watched_percentage),0) AS progress
+    FROM video_progress vp
+    JOIN course_contents cc ON cc.id = vp.content_id
+    WHERE vp.user_id = $user_id
+    AND cc.course_id = $course_id
+");
 
-$progress = 0;
+$progress = round(mysqli_fetch_assoc($progress_query)['progress'] ?? 0);
 
-/* NOTES */
+/* =========================
+   NOTES
+========================= */
+$notes = mysqli_query($conn, "
+    SELECT * FROM notes
+    WHERE course_id = $course_id
+    ORDER BY id DESC
+");
 
-$notes = mysqli_query(
-    $conn,
-    "SELECT * FROM notes
-     WHERE course_id='$course_id'
-     ORDER BY id DESC"
-);
+/* =========================
+   VIDEOS
+========================= */
+$videos = mysqli_query($conn, "
+    SELECT * FROM course_videos
+    WHERE course_id = $course_id
+    ORDER BY id ASC
+");
 
-/* VIDEOS */
+/* =========================
+   QUIZZES
+========================= */
+$quizzes = mysqli_query($conn, "
+    SELECT * FROM quizzes
+    WHERE course_id = $course_id
+    ORDER BY id DESC
+");
 
-$videos = mysqli_query(
-    $conn,
-    "SELECT * FROM course_videos
-     WHERE course_id='$course_id'
-     ORDER BY id ASC"
-);
-
-/* QUIZZES */
-
-$quizzes = mysqli_query(
-    $conn,
-    "SELECT * FROM quizzes
-     WHERE course_id='$course_id'
-     ORDER BY id DESC"
-);
-
-/* CONTENTS */
-
-$contents = mysqli_query(
-    $conn,
-    "SELECT * FROM course_contents
-     WHERE course_id='$course_id'
-     ORDER BY id ASC"
-);
-
+/* =========================
+   CONTENTS
+========================= */
+$contents = mysqli_query($conn, "
+    SELECT * FROM course_contents
+    WHERE course_id = $course_id
+    ORDER BY id ASC
+");
 ?>
 
 <!DOCTYPE html>
@@ -75,310 +140,172 @@ $contents = mysqli_query(
 <title><?= htmlspecialchars($course['title']) ?></title>
 
 <style>
-
-*{
-    margin:0;
-    padding:0;
-    box-sizing:border-box;
-    font-family:Arial,sans-serif;
-}
-
-body{
-    background:#f5f7fb;
-    padding:30px;
-}
-
-.card{
-    background:#fff;
-    padding:20px;
-    border-radius:12px;
-    margin-bottom:20px;
-    box-shadow:0 2px 10px rgba(0,0,0,.08);
-}
-
-h1,h2,h3{
-    margin-bottom:15px;
-}
-
-.btn{
-    display:inline-block;
-    background:#2563eb;
-    color:#fff;
-    padding:10px 15px;
-    border-radius:8px;
-    text-decoration:none;
-    margin-top:10px;
-}
-
-.btn:hover{
-    background:#1d4ed8;
-}
-
-.progress{
-    width:100%;
-    background:#e5e7eb;
-    height:12px;
-    border-radius:10px;
-    overflow:hidden;
-}
-
-.progress-bar{
-    height:100%;
-    background:#10b981;
-}
-
-video{
-    width:100%;
-    max-height:500px;
-    border-radius:10px;
-}
-
-.item{
-    padding:15px;
-    border-bottom:1px solid #e5e7eb;
-}
-
-.item:last-child{
-    border-bottom:none;
-}
-
-.course-meta{
-    color:#6b7280;
-    margin-top:10px;
-}
-
+*{margin:0;padding:0;box-sizing:border-box;font-family:Arial}
+body{background:#f5f7fb;padding:30px}
+.card{background:#fff;padding:20px;border-radius:12px;margin-bottom:20px}
+.progress{width:100%;background:#e5e7eb;height:12px;border-radius:10px;overflow:hidden}
+.progress-bar{height:100%;background:#10b981}
+.item{padding:15px;border-bottom:1px solid #eee}
+video{width:100%;border-radius:10px}
+.btn{padding:10px 15px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer}
+textarea,select{width:100%;padding:8px;margin-top:10px}
 </style>
 
 </head>
 <body>
 
 <!-- COURSE INFO -->
-
 <div class="card">
-
     <h1><?= htmlspecialchars($course['title']) ?></h1>
+    <p><?= htmlspecialchars($course['description']) ?></p>
 
-    <p>
-        <?= htmlspecialchars($course['description']) ?>
-    </p>
-
-    <div class="course-meta">
-
-        Instructor:
-        <strong><?= htmlspecialchars($course['instructor']) ?></strong>
-
-        <br><br>
-
-        Category:
-        <strong><?= htmlspecialchars($course['category']) ?></strong>
-
-        <br><br>
-
-        Lessons:
-        <strong><?= $course['lessons'] ?></strong>
-
-    </div>
-
+    <p><b>Instructor:</b> <?= htmlspecialchars($course['instructor']) ?></p>
 </div>
 
 <!-- PROGRESS -->
-
 <div class="card">
-
     <h3>Course Progress</h3>
 
     <div class="progress">
-        <div
-            class="progress-bar"
-            style="width:<?= $progress ?>%;">
-        </div>
+        <div class="progress-bar" style="width:<?= $progress ?>%"></div>
     </div>
 
-    <br>
-
-    <strong><?= $progress ?>% Completed</strong>
-
+    <p><?= $progress ?>% Completed</p>
 </div>
 
-<!-- VIDEOS -->
-
+<!-- VIDEOS (WITH TRACKING) -->
 <div class="card">
+<h2>Course Videos</h2>
 
-    <h2>Course Videos</h2>
+<?php while ($video = mysqli_fetch_assoc($videos)) { ?>
 
-    <?php if(mysqli_num_rows($videos) > 0){ ?>
+    <div class="item">
+        <h4><?= htmlspecialchars($video['title']) ?></h4>
 
-        <?php while($video = mysqli_fetch_assoc($videos)){ ?>
+        <?php if (!empty($video['video_path'])) { ?>
 
-            <div class="item">
+            <video controls class="video" data-id="<?= $video['id'] ?>">
+                <source src="uploads/videos/<?= htmlspecialchars($video['video_path']) ?>">
+            </video>
 
-                <h4>
-                    <?= htmlspecialchars($video['title']) ?>
-                </h4>
-
-                <br>
-
-                <?php if(!empty($video['video_path'])){ ?>
-
-                    <video controls>
-
-                        <source
-                            src="uploads/videos/<?= htmlspecialchars($video['video_path']) ?>"
-                            type="video/mp4">
-
-                        Your browser does not support videos.
-
-                    </video>
-
-                <?php } else { ?>
-
-                    <p>Video file missing.</p>
-
-                <?php } ?>
-
-            </div>
-
+        <?php } else { ?>
+            <p>Video file missing</p>
         <?php } ?>
+    </div>
 
-    <?php } else { ?>
-
-        <p>No videos uploaded.</p>
-
-    <?php } ?>
-
+<?php } ?>
 </div>
 
 <!-- NOTES -->
-
 <div class="card">
+<h2>Course Notes</h2>
 
-    <h2>Course Notes</h2>
+<?php while ($note = mysqli_fetch_assoc($notes)) { ?>
 
-    <?php if(mysqli_num_rows($notes) > 0){ ?>
+    <div class="item">
+        <h4><?= htmlspecialchars($note['title']) ?></h4>
+        <p><?= nl2br(htmlspecialchars($note['content'])) ?></p>
 
-        <?php while($note = mysqli_fetch_assoc($notes)){ ?>
-
-            <div class="item">
-
-                <h4>
-                    <?= htmlspecialchars($note['title']) ?>
-                </h4>
-
-                <br>
-
-                <p>
-                    <?= nl2br(htmlspecialchars($note['content'])) ?>
-                </p>
-
-                <?php if(!empty($note['file_path'])){ ?>
-
-                    <a
-                        href="uploads/notes/<?= htmlspecialchars($note['file_path']) ?>"
-                        target="_blank"
-                        class="btn">
-
-                        Download Note
-
-                    </a>
-
-                <?php } ?>
-
-            </div>
-
+        <?php if (!empty($note['file_path'])) { ?>
+            <a class="btn" href="uploads/notes/<?= htmlspecialchars($note['file_path']) ?>">Download</a>
         <?php } ?>
+    </div>
 
-    <?php } else { ?>
-
-        <p>No notes available.</p>
-
-    <?php } ?>
-
+<?php } ?>
 </div>
 
-<!-- LEARNING MATERIALS -->
-
+<!-- MATERIALS -->
 <div class="card">
+<h2>Learning Materials</h2>
 
-    <h2>Learning Materials</h2>
+<?php while ($content = mysqli_fetch_assoc($contents)) { ?>
 
-    <?php if(mysqli_num_rows($contents) > 0){ ?>
+    <div class="item">
+        <b><?= htmlspecialchars($content['content_title']) ?></b>
+        <p><?= htmlspecialchars($content['content_description']) ?></p>
+    </div>
 
-        <?php while($content = mysqli_fetch_assoc($contents)){ ?>
-
-            <div class="item">
-
-                <strong>
-                    <?= htmlspecialchars($content['content_title']) ?>
-                </strong>
-
-                <br><br>
-
-                Type:
-                <?= htmlspecialchars($content['content_type']) ?>
-
-                <br><br>
-
-                <?= htmlspecialchars($content['content_description']) ?>
-
-            </div>
-
-        <?php } ?>
-
-    <?php } else { ?>
-
-        <p>No learning materials available.</p>
-
-    <?php } ?>
-
+<?php } ?>
 </div>
 
 <!-- QUIZZES -->
-
 <div class="card">
+<h2>Course Quizzes</h2>
 
-    <h2>Course Quizzes</h2>
+<?php while ($quiz = mysqli_fetch_assoc($quizzes)) { ?>
 
-    <?php if(mysqli_num_rows($quizzes) > 0){ ?>
+    <div class="item">
+        <h4><?= htmlspecialchars($quiz['title']) ?></h4>
+        <p>Duration: <?= (int)$quiz['duration'] ?> min</p>
+        <p>Passing: <?= (int)$quiz['passing_score'] ?>%</p>
 
-        <?php while($quiz = mysqli_fetch_assoc($quizzes)){ ?>
+        <a class="btn" href="take_quiz.php?id=<?= $quiz['id'] ?>">Start Quiz</a>
+    </div>
 
-            <div class="item">
-
-                <h4>
-                    <?= htmlspecialchars($quiz['title']) ?>
-                </h4>
-
-                <br>
-
-                <p>
-                    Duration:
-                    <?= $quiz['duration'] ?> Minutes
-                </p>
-
-                <p>
-                    Passing Score:
-                    <?= $quiz['passing_score'] ?>%
-                </p>
-
-                <a
-                    href="take_quiz.php?id=<?= $quiz['id'] ?>"
-                    class="btn">
-
-                    Start Quiz
-
-                </a>
-
-            </div>
-
-        <?php } ?>
-
-    <?php } else { ?>
-
-        <p>No quizzes available.</p>
-
-    <?php } ?>
-
+<?php } ?>
 </div>
+
+<!-- RATING -->
+<div class="card">
+<h2>Rate Course</h2>
+
+<select id="rating">
+    <option value="5">5 ⭐</option>
+    <option value="4">4 ⭐</option>
+    <option value="3">3 ⭐</option>
+    <option value="2">2 ⭐</option>
+    <option value="1">1 ⭐</option>
+</select>
+
+<textarea id="comment" placeholder="Write comment..."></textarea>
+
+<button class="btn" onclick="sendReview()">Submit</button>
+</div>
+
+<script>
+
+/* =========================
+   VIDEO TRACKING
+========================= */
+document.querySelectorAll(".video").forEach(video => {
+
+    let id = video.dataset.id;
+    let last = 0;
+
+    video.addEventListener("timeupdate", function () {
+
+        let percent = Math.floor((video.currentTime / video.duration) * 100);
+
+        if (percent === last) return;
+        last = percent;
+
+        fetch(location.href, {
+            method: "POST",
+            headers: {"Content-Type":"application/x-www-form-urlencoded"},
+            body: "action=save_progress&content_id=" + id + "&watched=" + percent
+        });
+
+    });
+
+});
+
+/* =========================
+   SEND REVIEW
+========================= */
+function sendReview() {
+
+    let rating = document.getElementById("rating").value;
+    let comment = document.getElementById("comment").value;
+
+    fetch(location.href, {
+        method: "POST",
+        headers: {"Content-Type":"application/x-www-form-urlencoded"},
+        body: "action=add_review&rating=" + rating + "&comment=" + encodeURIComponent(comment)
+    }).then(() => location.reload());
+
+}
+
+</script>
 
 </body>
 </html>

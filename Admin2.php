@@ -1,17 +1,21 @@
 <?php
 session_start();
 include "db.php";
+include "advance.php";
 
 /* 
    DASHBOARD STATISTICS
  */
 
-// Total Students
-$total_users = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total FROM users"))['total'] ?? 0;
-
-// Active Students
-$active_students = 0;
+   // Total Students
+   $total_students = mysqli_fetch_assoc(
+       mysqli_query($conn, "SELECT COUNT(*) AS total FROM users WHERE role = 'student'")
+   )['total'] ?? 0;
+   
+   // Active Students
+   $active_students = mysqli_fetch_assoc(
+       mysqli_query($conn, "SELECT COUNT(*) AS total FROM users WHERE role = 'student' AND status = 'active'")
+   )['total'] ?? 0;
 
 $result = mysqli_query($conn,
 "SELECT COUNT(*) AS total FROM users WHERE status='active'");
@@ -140,55 +144,6 @@ $allowed_docs   = ['pdf','doc','docx'];
 
 $upload_dir = "uploads/";
 
-/* 
-   HANDLE CREATE COURSE
- */
-if(isset($_POST['create_course'])){
-
-    $title = trim($_POST['title']);
-    $description = trim($_POST['description']);
-    $category = trim($_POST['category']);
-    $instructor = trim($_POST['instructor']);
-    $price = floatval($_POST['price']);
-
-    if($title == "" || $description == "" || $category == "" || $instructor == ""){
-        die("All fields are required");
-    }
-
-    $thumbnail = "default.jpg";
-
-    /*  THUMBNAIL VALIDATION */
-    if(!empty($_FILES['thumbnail']['name'])){
-
-        $fileName = $_FILES['thumbnail']['name'];
-        $fileTmp  = $_FILES['thumbnail']['tmp_name'];
-        $fileSize = $_FILES['thumbnail']['size'];
-
-        $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-
-        if(!in_array($ext, $allowed_images)){
-            die("Only image files allowed (jpg, jpeg, png, gif, webp)");
-        }
-
-        if($fileSize > 2 * 1024 * 1024){
-            die("Image too large (max 2MB)");
-        }
-
-        $thumbnail = time().'_'.rand(1000,9999).'.'.$ext;
-
-        move_uploaded_file($fileTmp, $upload_dir.$thumbnail);
-    }
-
-    mysqli_query($conn,
-    "INSERT INTO courses(title,description,category,instructor,price,thumbnail)
-     VALUES('$title','$description','$category','$instructor','$price','$thumbnail')"
-    );
-
-    mysqli_query($conn,
-    "INSERT INTO activities(user_id,message)
-     VALUES(1,'Created new course: $title')"
-    );
-}
 
 
 /*   HANDLE UPLOAD MATERIAL */
@@ -243,30 +198,7 @@ if(isset($_POST['upload_material'])){
     }
 }
 
-/* student  */ 
-if(isset($_POST['student_action'])){
 
-    $student_id = $_POST['user_id'];
-    $action = $_POST['action'];
-
-    if($action == "activate"){
-        mysqli_query($conn, "UPDATE users SET status='active' WHERE id='$user_id'");
-    }
-
-    if($action == "suspend"){
-        mysqli_query($conn, "UPDATE users SET status='suspended' WHERE id='$user_id'");
-    }
-
-    if($action == "delete"){
-        mysqli_query($conn, "DELETE FROM users WHERE id='$user_id'");
-    }
-
-    if($action == "reset_password"){
-        $newPass = password_hash("123456", PASSWORD_DEFAULT);
-        mysqli_query($conn, "UPDATE users SET password='$newPass' WHERE id='$user_id'");
-    }
-
-}
 
 /*  ENROLLMENT ACTIONS  */
 
@@ -327,197 +259,22 @@ $enrollments = mysqli_query($conn, "
     ORDER BY e.id DESC
 ");
 
+
 /* COURSE  */
-/*  FETCH COURSES  */
-$courses = mysqli_query($conn, "SELECT * FROM courses ORDER BY id DESC");
+$teachers = mysqli_query($conn,"
+    SELECT t.id, u.full_name
+    FROM teachers t
+    JOIN users u ON t.user_id = u.id
+    ORDER BY u.full_name ASC
+");
 
-/*  HANDLE CREATE COURSE  */
-if(isset($_POST['create_course'])){
-
-    $title = $_POST['title'];
-    $description = $_POST['description'];
-    $category = $_POST['category'];
-    $custom_category = $_POST['custom_category'];
-    $type = $_POST['type'];
-    $price = $_POST['price'];
-    $status = $_POST['status'];
-
-    /*  IMAGE UPLOAD  */
-    $thumbnail = "";
-    if(!empty($_FILES['thumbnail']['name'])){
-        $target_dir = "uploads/";
-        if(!is_dir($target_dir)) mkdir($target_dir);
-
-        $thumbnail = $target_dir . time() . "_" . basename($_FILES["thumbnail"]["name"]);
-        move_uploaded_file($_FILES["thumbnail"]["tmp_name"], $thumbnail);
-    }
-
-    $stmt = $conn->prepare("INSERT INTO courses 
-    (title, description, category, custom_category, thumbnail, type, price, status)
-    VALUES (?,?,?,?,?,?,?,?)");
-
-    $stmt->bind_param("ssssssds",
-        $title,
-        $description,
-        $category,
-        $custom_category,
-        $thumbnail,
-        $type,
-        $price,
-        $status
-    );
-
-    $stmt->execute();
-
-}
-
-/*  HANDLE DELETE / ARCHIVE  */
-if(isset($_POST['delete_course'])){
-
-    $id = $_POST['course_id'];
-    $action = $_POST['action'];
-
-    if($action == "delete"){
-        mysqli_query($conn, "DELETE FROM courses WHERE id='$id'");
-    } else {
-        mysqli_query($conn, "UPDATE courses SET status='archived' WHERE id='$id'");
-    }
-
-}
-
-$user_id = $_SESSION['user_id'] ?? 1;
-$user_role = $_SESSION['role'] ?? "Teacher";
-
-/* =========================
-   UPLOAD FOLDER
-========================= */
-$upload_dir = "uploads/videos/";
-if(!file_exists($upload_dir)){
-    mkdir($upload_dir, 0777, true);
-}
-
-/* =========================
-   UPLOAD VIDEO
-========================= */
-if(isset($_POST['upload_video'])){
-
-    if($user_role != "Teacher" && $user_role != "Admin"){
-        die("Unauthorized");
-    }
-
-    $course_id = $_POST['course_id'];
-    $title = $_POST['title'];
-    $access = $_POST['access_type'];
-
-    $file_path = "";
-
-    if(!empty($_FILES['video']['name'])){
-
-        $file_name = time() . "_" . basename($_FILES['video']['name']);
-        $target = $upload_dir . $file_name;
-
-        move_uploaded_file($_FILES['video']['tmp_name'], $target);
-
-        $file_path = $target;
-    }
-
-    $conn->query("
-        INSERT INTO course_videos(course_id,title,video_path,access_type,uploaded_by)
-        VALUES('$course_id','$title','$file_path','$access','$user_id')
-    ");
-}
-
-/* =========================
-   DELETE VIDEO
-========================= */
-if(isset($_GET['delete'])){
-
-    if($user_role != "Teacher" && $user_role != "Admin"){
-        die("Unauthorized");
-    }
-
-    $id = (int)$_GET['delete'];
-
-    $old = $conn->query("
-        SELECT video_path 
-        FROM course_videos 
-        WHERE id=$id
-    ")->fetch_assoc();
-
-    if($old && file_exists($old['video_path'])){
-        unlink($old['video_path']);
-    }
-
-    $conn->query("DELETE FROM course_videos WHERE id=$id");
-
-    echo "<script>window.location='videos.php';</script>";
-}
-
-/* =========================
-   SECURE VIEW VIDEO
-========================= */
-if(isset($_GET['view'])){
-
-    $id = (int)$_GET['view'];
-
-    $video = $conn->query("
-        SELECT v.*, c.course_type
-        FROM course_videos v
-        JOIN courses c ON c.id = v.course_id
-        WHERE v.id=$id
-    ")->fetch_assoc();
-
-    if(!$video){
-        die("Video not found");
-    }
-
-    $check = $conn->query("
-        SELECT * FROM enrollments
-        WHERE user_id=$user_id
-        AND course_id={$video['course_id']}
-        AND status IN ('ongoing','completed','approved')
-    ");
-
-    $isEnrolled = $check->num_rows > 0;
-
-    if($video['access_type'] == 'paid' && !$isEnrolled){
-        die("<h2>Access Denied ❌</h2><p>You must enroll first.</p>");
-    }
-
-    ?>
-    
-    <div class="video-container">
-        <h2><?= $video['title'] ?></h2>
-
-        <video width="100%" controls controlsList="nodownload" id="videoPlayer">
-            <source src="<?= $video['video_path'] ?>" type="video/mp4">
-        </video>
-    </div>
-
-    <script>
-    document.addEventListener("contextmenu", e => e.preventDefault());
-
-    document.addEventListener("keydown", function(e){
-        if(e.key === "PrintScreen"){
-            alert("Screen capture disabled");
-        }
-    });
-
-    document.getElementById("videoPlayer").onmousedown = e => e.preventDefault();
-    </script>
-
-    <?php
-    exit;
-}
-
-/* =========================
-   FETCH VIDEOS (LIST VIEW)
-========================= */
-$videos = $conn->query("
-SELECT v.*, c.title AS course
-FROM course_videos v
-JOIN courses c ON c.id = v.course_id
-ORDER BY v.id DESC
+/* FETCH COURSES */
+$courses = mysqli_query($conn,"
+    SELECT c.*, u.full_name
+    FROM courses c
+    LEFT JOIN teachers t ON c.teacher_id = t.id
+    LEFT JOIN users u ON t.user_id = u.id
+    ORDER BY c.id DESC
 ");
 
 /* =========================
@@ -844,9 +601,9 @@ SELECT
 FROM enrollments e
 JOIN users u ON u.id = e.user_id
 JOIN courses c ON c.id = e.course_id
+WHERE u.role = 'student'
 ORDER BY e.id DESC
 ");
-
 /* 
    UPDATE PAYMENT STATUS 
  */
@@ -938,61 +695,109 @@ $payments = mysqli_query($conn,
 /* 
    CREATE ANNOUNCEMENT
  */
-if(isset($_POST['add'])){
+   if (isset($_POST['add'])) {
 
-    $course_id = intval($_POST['course_id']);
-    $title = trim($_POST['title']);
-    $message = trim($_POST['message']);
+   $course_id = intval($_POST['course_id']);
+   $title = trim($_POST['title']);
+   $message = trim($_POST['message']);
 
-    $stmt = $conn->prepare("
-        INSERT INTO announcements (course_id, teacher_id, title, message)
-        VALUES (?, ?, ?, ?)
-    ");
+   if ($course_id > 0 && $title !== '' && $message !== '') {
 
-    $stmt->bind_param("iiss", $course_id, $teacher_id, $title, $message);
-    $stmt->execute();
+       // OPTIONAL: ensure teacher owns course
+       $check = $conn->prepare("
+           SELECT 1 FROM course_teachers 
+           WHERE course_id = ? AND teacher_id = ?
+       ");
+       $check->bind_param("ii", $course_id, $teacher_id);
+       $check->execute();
+       $allowed = $check->get_result()->num_rows > 0;
+       $check->close();
+
+       if ($allowed) {
+
+           $stmt = $conn->prepare("
+               INSERT INTO announcements (course_id, teacher_id, title, message)
+               VALUES (?, ?, ?, ?)
+           ");
+
+           $stmt->bind_param("iiss", $course_id, $teacher_id, $title, $message);
+
+           if (!$stmt->execute()) {
+               die("Insert failed: " . $stmt->error);
+           }
+
+           $stmt->close();
+       } else {
+           die("You are not assigned to this course");
+       }
+   }
 }
 
-/* 
-   DELETE ANNOUNCEMENT
- */
-if(isset($_GET['delete'])){
-    $id = intval($_GET['delete']);
-    $conn->query("
-        DELETE FROM announcements
-        WHERE id=$id AND teacher_id=$teacher_id
-    ");
+/* =========================
+  DELETE ANNOUNCEMENT
+========================= */
+if (isset($_GET['delete'])) {
+
+   $id = intval($_GET['delete']);
+
+   $stmt = $conn->prepare("
+       DELETE FROM announcements
+       WHERE id = ? AND teacher_id = ?
+   ");
+
+   $stmt->bind_param("ii", $id, $teacher_id);
+   $stmt->execute();
+   $stmt->close();
 }
 
-/* 
-   COURSES (ASSIGNED TO TEACHER)
- */
+
+/* =========================
+  COURSES (ASSIGNED TO TEACHER)
+========================= */
 $courses = $conn->query("
-SELECT c.id, c.title
-FROM courses c
-JOIN course_teachers ct ON ct.course_id = c.id
-WHERE ct.teacher_id = $teacher_id
+   SELECT c.id, c.title
+   FROM courses c
+   INNER JOIN course_teachers ct ON ct.course_id = c.id
+   WHERE ct.teacher_id = $teacher_id
 ");
 
-/* 
-   ANNOUNCEMENTS LIST
- */
+/* =========================
+  ANNOUNCEMENTS LIST
+========================= */
 $announcements = $conn->query("
-SELECT a.*, c.title AS course
-FROM announcements a
-JOIN courses c ON c.id = a.course_id
-WHERE a.teacher_id = $teacher_id
-ORDER BY a.created_at DESC
+   SELECT a.*, c.title AS course
+   FROM announcements a
+   INNER JOIN courses c ON c.id = a.course_id
+   WHERE a.teacher_id = $teacher_id
+   ORDER BY a.created_at DESC
 ");
+
+
 
 /* ROLE */
 date_default_timezone_set("Africa/Nairobi");
+
 include "sendmail1.php";
+include "db.php"; // make sure DB is included
 
 $message = "";
 $messageType = "";
 
+/* =========================
+   CSRF INIT (ADD THIS)
+========================= */
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 if (isset($_POST['add_teacher'])) {
+
+    /* =========================
+       CSRF CHECK (ADDED ONLY)
+    ========================= */
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die("Invalid CSRF token. Request blocked.");
+    }
 
     // =========================
     // INPUTS
@@ -1098,9 +903,6 @@ if (isset($_POST['add_teacher'])) {
 
                 if ($stmt->execute()) {
 
-                    // =========================
-                    // SEND OTP EMAIL
-                    // =========================
                     sendOTP($email, $full_name, $otp);
 
                     header("Location: verify2.php?email=" . urlencode($email));
@@ -1115,6 +917,140 @@ if (isset($_POST['add_teacher'])) {
     }
 }
 
+/* =========================
+   PAYMENT STATUS COUNTS
+========================= */
+
+$successful_payments = 0;
+$pending_payments = 0;
+$failed_payments = 0;
+
+$result = mysqli_query($conn,"
+    SELECT status, COUNT(*) AS total
+    FROM payments
+    GROUP BY status
+");
+
+while($row = mysqli_fetch_assoc($result)){
+
+    if($row['status'] == 'success'){
+        $successful_payments = $row['total'];
+    }
+
+    if($row['status'] == 'pending'){
+        $pending_payments = $row['total'];
+    }
+
+    if($row['status'] == 'failed'){
+        $failed_payments = $row['total'];
+    }
+}
+
+
+/* =========================
+   REVENUE GRAPH DATA
+========================= */
+
+$revenue_labels = [];
+$revenue_values = [];
+
+$revenue_query = mysqli_query($conn,"
+    SELECT
+        DATE_FORMAT(MIN(payment_date),'%b %Y') AS month_name,
+        SUM(amount) AS total
+    FROM payments
+    WHERE status='success'
+      AND payment_date IS NOT NULL
+    GROUP BY YEAR(payment_date), MONTH(payment_date)
+    ORDER BY YEAR(payment_date), MONTH(payment_date)
+");
+if($revenue_query){
+
+    while($row = mysqli_fetch_assoc($revenue_query)){
+
+        $revenue_labels[] = $row['month_name'];
+        $revenue_values[] = (float)$row['total'];
+    }
+}
+
+
+/* =========================
+   STUDENT GROWTH DATA
+========================= */
+
+$student_labels = [];
+$student_values = [];
+
+$student_query = mysqli_query($conn,"
+    SELECT
+        DATE_FORMAT(MIN(created_at),'%b %Y') AS month_name,
+        COUNT(*) AS total
+    FROM users
+    WHERE role='student'
+    GROUP BY YEAR(created_at), MONTH(created_at)
+    ORDER BY YEAR(created_at), MONTH(created_at)
+");
+
+$running_total = 0;
+
+if($student_query){
+
+    while($row = mysqli_fetch_assoc($student_query)){
+
+        $running_total += $row['total'];
+
+        $student_labels[] = $row['month_name'];
+        $student_values[] = $running_total;
+    }
+}
+
+
+/* =========================
+   ENROLLMENT TREND DATA
+========================= */
+
+$enrollment_labels = [];
+$enrollment_values = [];
+
+$enrollment_query = mysqli_query($conn,"
+    SELECT
+        DATE_FORMAT(MIN(enrolled_at),'%b %Y') AS month_name,
+        COUNT(*) AS total
+    FROM enrollments
+    GROUP BY YEAR(enrolled_at), MONTH(enrolled_at)
+    ORDER BY YEAR(enrolled_at), MONTH(enrolled_at)
+");
+
+if($enrollment_query){
+
+    while($row = mysqli_fetch_assoc($enrollment_query)){
+
+        $enrollment_labels[] = $row['month_name'];
+        $enrollment_values[] = (int)$row['total'];
+    }
+}
+
+
+/* =========================
+   FALLBACK DATA
+========================= */
+
+if(empty($revenue_labels)){
+    $revenue_labels = ['No Data'];
+    $revenue_values = [0];
+}
+
+if(empty($student_labels)){
+    $student_labels = ['No Data'];
+    $student_values = [0];
+}
+
+if(empty($enrollment_labels)){
+    $enrollment_labels = ['No Data'];
+    $enrollment_values = [0];
+}
+
+
 ?>
 
 
@@ -1125,7 +1061,7 @@ if (isset($_POST['add_teacher'])) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <title>LMS Admin Dashboard</title>
-
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <!-- FONT AWESOME -->
 <link rel="stylesheet"
 href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -1266,7 +1202,7 @@ body{
 
 .card{
     background:#fff;
-    padding:25px;
+    padding:20px;
     border-radius:15px;
     box-shadow:0 2px 10px rgba(0,0,0,0.05);
     transition:0.3s;
@@ -1277,15 +1213,15 @@ body{
 }
 
 .card .icon{
-    width:60px;
-    height:60px;
+    width:40px;
+    height:40px;
     border-radius:12px;
     display:flex;
     align-items:center;
     justify-content:center;
     font-size:24px;
     color:#fff;
-    margin-bottom:15px;
+    margin-bottom:10px;
 }
 
 .students{ background:#2563eb; }
@@ -1294,7 +1230,6 @@ body{
 .revenue{ background:#dc2626; }
 
 .card h3{
-    font-size:30px;
     margin-bottom:5px;
     color:#0f172a;
 }
@@ -1649,6 +1584,46 @@ table tbody tr:hover{
     from{transform:translateY(-20px);opacity:0;}
     to{transform:translateY(0);opacity:1;}
 }
+
+.charts{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(450px,1fr));
+    gap:20px;
+    margin-top:20px;
+}
+
+.chart-box{
+    background:#fff;
+    border-radius:12px;
+    padding:20px;
+    box-shadow:0 3px 10px rgba(0,0,0,.08);
+}
+
+.chart-box h2{
+    margin-bottom:15px;
+    font-size:18px;
+}
+
+.chart-box canvas{
+    width:100% !important;
+    height:300px !important;
+}
+
+.payment-summary{
+    display:flex;
+    justify-content:space-between;
+    margin-bottom:20px;
+}
+
+.summary-item{
+    text-align:center;
+}
+
+.summary-item strong{
+    display:block;
+    font-size:22px;
+    margin-top:5px;
+}
 </style>
 </head>
 <body>
@@ -1716,6 +1691,12 @@ table tbody tr:hover{
                 <a href="#" onclick="showEnrollments()">
                     <i class="fas fa-user-check"></i>
                     <span>Enrollments</span>
+                </a>
+            </li>
+            <li>
+                <a href="cpassword.php">
+                    <i class="fas fa-user-plus"></i>
+                    <span>Assign</span>
                 </a>
             </li>
 
@@ -1800,7 +1781,7 @@ table tbody tr:hover{
             <div class="icon students">
                 <i class="fas fa-user-graduate"></i>
             </div>
-            <h3><?= $total_users ?></h3>
+            <h3><?= $total_students ?></h3>
             <p>Total Students</p>
         </div>
 
@@ -1809,7 +1790,7 @@ table tbody tr:hover{
                 <i class="fas fa-user-check"></i>
             </div>
             <h3><?= $active_students ?></h3>
-            <p>Active Students</p>
+            <p>Active Users</p>
         </div>
 
         <div class="card">
@@ -1873,62 +1854,36 @@ table tbody tr:hover{
     <!-- 
          CHARTS
      -->
-    <div class="charts">
+     <div class="charts">
 
-        <div class="chart-box">
-            <h2>Revenue Graph</h2>
+<div class="chart-box">
+    <h2><i class="fas fa-chart-area"></i> Revenue Graph</h2>
+    <canvas id="revenueChart"></canvas>
+</div>
 
-            <div class="chart-placeholder">
-                <i class="fas fa-chart-area"></i>
-                <p>Revenue analytics graph goes here</p>
-            </div>
-        </div>
+<div class="chart-box">
+    <h2><i class="fas fa-chart-line"></i> Student Growth</h2>
+    <canvas id="studentChart"></canvas>
+</div>
 
-        <div class="chart-box">
-            <h2>Student Growth Chart</h2>
+<div class="chart-box">
+    <h2><i class="fas fa-chart-bar"></i> Enrollment Trends</h2>
+    <canvas id="enrollmentChart"></canvas>
+</div>
 
-            <div class="chart-placeholder">
-                <i class="fas fa-chart-line"></i>
-                <p>Student growth chart goes here</p>
-            </div>
-        </div>
+<div class="chart-box">
+    <h2><i class="fas fa-money-bill-wave"></i> Payment Status</h2>
 
-        <div class="chart-box">
-            <h2>Enrollment Trends</h2>
-
-            <div class="chart-placeholder">
-                <i class="fas fa-chart-bar"></i>
-                <p>Enrollment trend graph goes here</p>
-            </div>
-        </div>
-
-        <div class="chart-box">
-
-            <h2>Payment Status Summary</h2>
-
-            <div class="payment-summary">
-
-                <div class="summary-item">
-                    <span>Successful Payments</span>
-                    <strong><?= $successful_payments ?></strong>
-                </div>
-
-                <div class="summary-item">
-                    <span>Pending Payments</span>
-                    <strong><?= $pending_payments ?></strong>
-                </div>
-
-                <div class="summary-item">
-                    <span>Failed Payments</span>
-                    <strong><?= $failed_payments ?></strong>
-                </div>
-
-            </div>
-
-        </div>
-
+    <div class="payment-summary">
+        <div><span>Success</span><strong><?= $successful_payments ?></strong></div>
+        <div><span>Pending</span><strong><?= $pending_payments ?></strong></div>
+        <div><span>Failed</span><strong><?= $failed_payments ?></strong></div>
     </div>
 
+    <canvas id="paymentChart"></canvas>
+</div>
+
+</div>
     <!-- 
          MOST POPULAR COURSES
      -->
@@ -1978,7 +1933,7 @@ table tbody tr:hover{
 
    <div class="table-section">
 
-    <h2>Recent Student Registrations</h2>
+    <h2>Recent Registrations</h2>
 
     <table>
 
@@ -1989,7 +1944,6 @@ table tbody tr:hover{
                 <th>Email</th>
                 <th>Course</th>
                 <th>Status</th>
-                <th>Action</th>
             </tr>
         </thead>
 
@@ -2014,10 +1968,7 @@ table tbody tr:hover{
                     </span>
                 </td>
 
-                <td>
-                    <button class="btn edit">Edit</button>
-                    <button class="btn delete">Delete</button>
-                </td>
+               
 
             </tr>
 
@@ -2171,36 +2122,39 @@ table tbody tr:hover{
 <h2>Add Teacher</h2>
 
 <?php if (!empty($message)) { ?>
-    <div class="<?php echo $messageType; ?>">
+    <div class="<?php echo htmlspecialchars($messageType); ?>">
         <?php echo htmlspecialchars($message); ?>
     </div>
 <?php } ?>
 
-<form method="POST">
+<form method="POST" autocomplete="off">
+
+    <!-- 🔐 CSRF PROTECTION -->
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
 
     <label>Teacher Name *</label>
-    <input type="text" name="full_name" required>
+    <input type="text" name="full_name" required maxlength="100" pattern="[A-Za-z\s]+" title="Only letters allowed">
 
     <label>Email *</label>
-    <input type="email" name="email" required>
+    <input type="email" name="email" required maxlength="150">
 
     <label>Password *</label>
-    <input type="password" name="password" required>
+    <input type="password" name="password" required minlength="6">
 
     <label>Employee Number</label>
-    <input type="text" name="employee_no">
+    <input type="text" name="employee_no" maxlength="50">
 
     <label>Phone Number</label>
-    <input type="text" name="phone">
+    <input type="text" name="phone" maxlength="20" pattern="[0-9+]+">
 
     <label>Specialization</label>
-    <input type="text" name="specialization">
+    <input type="text" name="specialization" maxlength="100">
 
     <label>Qualification</label>
-    <input type="text" name="qualification">
+    <input type="text" name="qualification" maxlength="100">
 
     <label>Experience Years</label>
-    <input type="number" name="experience_years" min="0">
+    <input type="number" name="experience_years" min="0" max="60">
 
     <button type="submit" name="add_teacher">Add Teacher</button>
 
@@ -2213,8 +2167,10 @@ table tbody tr:hover{
 
 
 
+
 <!-- == COURSE SECTION == -->
 <div class="box" id="coursesSection" style="display:none;">
+
 <style>
 body{font-family:Arial;background:#f4f6f9;padding:20px;margin:0}
 .container{max-width:1200px;margin:auto}
@@ -2222,31 +2178,31 @@ body{font-family:Arial;background:#f4f6f9;padding:20px;margin:0}
 input,textarea,select{width:100%;padding:10px;margin-bottom:10px;border:1px solid #ccc;border-radius:5px}
 button{padding:10px;border:none;border-radius:5px;cursor:pointer}
 .btn-primary{background:#007bff;color:#fff}
-.btn-warning{background:#f0ad4e;color:#fff}
 .btn-danger{background:#dc3545;color:#fff}
-.btn-success{background:#28a745;color:#fff}
 table{width:100%;border-collapse:collapse}
 th,td{border:1px solid #ddd;padding:10px}
 .status{padding:5px 10px;border-radius:5px;color:#fff}
-.draft{background:gray}
-.published{background:green}
-.archived{background:orange}
-.suspended{background:red}
+.Active{background:green}
+.Inactive{background:red}
 img{width:80px;border-radius:5px}
 </style>
+
 <div class="container">
 
-<!--  CREATE COURSE  -->
+<!-- CREATE COURSE -->
 <div class="card">
 <h2>Create Course</h2>
 
 <form method="POST" enctype="multipart/form-data">
 
-    <input type="text" name="title" placeholder="Course Title" required>
+    <!-- 🔐 CSRF -->
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
 
-    <textarea name="description" placeholder="Course Description" required></textarea>
+    <input type="text" name="title" placeholder="Course Title" required maxlength="150">
 
-    <label>Category / Skill Area</label>
+    <textarea name="description" placeholder="Course Description" required maxlength="2000"></textarea>
+
+    <label>Category</label>
     <select name="category" required>
         <option value="">Select Category</option>
         <option value="web_dev">Web Development</option>
@@ -2257,52 +2213,75 @@ img{width:80px;border-radius:5px}
         <option value="ai_ml">AI / ML</option>
     </select>
 
-    <input type="text" name="custom_category" placeholder="Or custom category">
+    <input type="text" name="custom_category" placeholder="Custom Category (optional)" maxlength="100">
 
     <label>Thumbnail</label>
-    <input type="file" name="thumbnail" required>
+    <input type="file" name="thumbnail" accept="image/*">
 
-    <select name="type">
-        <option value="free">Free</option>
-        <option value="paid">Paid</option>
+    <select name="course_type">
+        <option value="Free">Free</option>
+        <option value="Paid">Paid</option>
     </select>
 
-    <input type="number" name="price" placeholder="Price">
-
-    <select name="status">
-        <option value="draft">Draft</option>
-        <option value="published">Published</option>
+    <select name="status" required>
+        <option value="Active">Active</option>
+        <option value="Inactive">Inactive</option>
     </select>
+
+    <label>Assign Teacher</label>
+    <select name="teacher_id" required>
+        <option value="">Select Teacher</option>
+
+        <?php
+        $teachers = mysqli_query($conn,"SELECT id, full_name FROM users WHERE role='teacher'");
+        while($teacher = mysqli_fetch_assoc($teachers)){
+        ?>
+            <option value="<?= (int)$teacher['id']; ?>">
+                <?= htmlspecialchars($teacher['full_name']) ?>
+            </option>
+        <?php } ?>
+    </select>
+
+    <input type="number" name="price" placeholder="Price" step="0.01" min="0">
 
     <button class="btn-primary" name="create_course">Create Course</button>
+
 </form>
 </div>
 
-<!--  DELETE / ARCHIVE  -->
+<!-- DELETE / ARCHIVE -->
 <div class="card">
 <h2>Delete / Archive</h2>
 
 <form method="POST">
 
+    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+
     <select name="course_id" required>
         <option value="">Select Course</option>
-        <?php while($c = mysqli_fetch_assoc($courses)){ ?>
-            <option value="<?= $c['id'] ?>">
-                <?= $c['title'] ?>
+
+        <?php
+        $course_list = mysqli_query($conn,"SELECT id,title FROM courses ORDER BY id DESC");
+        while($c = mysqli_fetch_assoc($course_list)){
+        ?>
+            <option value="<?= (int)$c['id']; ?>">
+                <?= htmlspecialchars($c['title']) ?>
             </option>
         <?php } ?>
+
     </select>
 
-    <select name="action">
+    <select name="action" required>
         <option value="archive">Archive</option>
         <option value="delete">Delete</option>
     </select>
 
     <button class="btn-danger" name="delete_course">Apply</button>
+
 </form>
 </div>
 
-<!--  COURSE TABLE  -->
+<!-- COURSE LIST -->
 <div class="card">
 <h2>Course List</h2>
 
@@ -2317,123 +2296,183 @@ img{width:80px;border-radius:5px}
 </tr>
 
 <?php
-$courses2 = mysqli_query($conn, "SELECT * FROM courses ORDER BY id DESC");
+$courses2 = mysqli_query($conn,"SELECT * FROM courses ORDER BY id DESC");
+
 while($row = mysqli_fetch_assoc($courses2)){
 ?>
-
 <tr>
-<td><?= $row['id'] ?></td>
-<td><?= $row['title'] ?></td>
-<td><?= $row['category'] ?></td>
+<td><?= (int)$row['id'] ?></td>
+<td><?= htmlspecialchars($row['title']) ?></td>
+<td><?= htmlspecialchars($row['category']) ?></td>
+
 <td>
-    <?php if($row['thumbnail']){ ?>
-        <img src="<?= $row['thumbnail'] ?>">
+    <?php if (!empty($row['thumbnail'])) { ?>
+        <img src="<?= htmlspecialchars($row['thumbnail']) ?>" alt="thumbnail">
     <?php } ?>
 </td>
-<td>$<?= $row['price'] ?></td>
+
+<td>$<?= htmlspecialchars($row['price']) ?></td>
+
 <td>
-    <span class="status <?= $row['status'] ?>">
-        <?= $row['status'] ?>
+    <span class="status <?= htmlspecialchars($row['status']) ?>">
+        <?= htmlspecialchars($row['status']) ?>
     </span>
 </td>
-</tr>
 
+</tr>
 <?php } ?>
 
 </table>
-</div>
 
 </div>
 
 </div>
+</div>
+
+
+
 
 <!== VEDIO SECTION == -- >
 <div class="box" id="videoSection" style="display:none;">
+
 <style>
 body{font-family:Arial;background:#f5f6fa;}
 .container{padding:20px;}
 
-table{width:100%;border-collapse:collapse;background:#fff;}
-th,td{padding:10px;border:1px solid #ddd;}
-th{background:#2563eb;color:#fff;}
+table{
+    width:100%;
+    border-collapse:collapse;
+    background:#fff;
+}
+
+th,td{
+    padding:10px;
+    border:1px solid #ddd;
+}
+
+th{
+    background:#2563eb;
+    color:#fff;
+}
 
 input,select{
-width:100%;
-padding:8px;
-margin:5px 0;
+    width:100%;
+    padding:8px;
+    margin:5px 0;
 }
 
 button{
-padding:8px 12px;
-background:#2563eb;
-color:#fff;
-border:none;
-cursor:pointer;
+    padding:10px 15px;
+    background:#2563eb;
+    color:#fff;
+    border:none;
+    cursor:pointer;
+}
+
+button:hover{
+    background:#1e40af;
 }
 
 a{color:red;}
 </style>
 
+
 <div class="container">
 
-<h2>🎬 Video Management System</h2>
+<!-- ================= UPLOAD FORM ================= -->
 
-<!-- UPLOAD FORM -->
-<?php if($user_role=="Teacher" || $user_role=="Admin"){ ?>
+<h3 ><?= $editVideo ? "✏️ Edit Video" : "⬆️ Upload Video" ?></h3>
 
 <form method="POST" enctype="multipart/form-data">
 
-<h3>Upload Video</h3>
+<input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+<input type="hidden" name="video_id" value="<?= $editVideo['id'] ?? '' ?>">
 
+<label>Course</label>
 <select name="course_id" required>
-<option>Select Course</option>
+<option value="">Select Course</option>
+
 <?php
-$courses = $conn->query("SELECT * FROM courses");
-while($c = $courses->fetch_assoc()){
-    echo "<option value='{$c['id']}'>{$c['title']}</option>";
+$courses = $conn->query("SELECT id,title FROM courses ORDER BY title ASC");
+while ($c = $courses->fetch_assoc()) {
+    $sel = ($editVideo && $editVideo['course_id']==$c['id']) ? "selected" : "";
+    echo "<option value='{$c['id']}' $sel>".htmlspecialchars($c['title'])."</option>";
 }
 ?>
 </select>
 
-<input name="title" placeholder="Video Title" required>
+<label>Title</label>
+<input type="text" name="title" value="<?= $editVideo['title'] ?? '' ?>" required>
 
-<input type="file" name="video" required>
+<label>Description</label>
+<textarea name="description"><?= $editVideo['description'] ?? '' ?></textarea>
 
+<label>Video File</label>
+<input type="file" name="video">
+
+<label>Cloud Link</label>
+<input type="text" name="cloud_url" value="<?= $editVideo['cloud_url'] ?? '' ?>">
+
+<label>Access Type</label>
 <select name="access_type">
-<option value="free">Free Course</option>
-<option value="paid">Paid Course</option>
+<option value="free" <?= (($editVideo['access_type'] ?? '')=='free')?'selected':'' ?>>Free</option>
+<option value="paid" <?= (($editVideo['access_type'] ?? '')=='paid')?'selected':'' ?>>Paid</option>
 </select>
 
-<button name="upload_video">Upload</button>
+<?php if ($editVideo) { ?>
+<button type="submit" name="update_video">Update Video</button>
+<?php } else { ?>
+<button type="submit" name="upload_video">Upload Video</button>
+<?php } ?>
 
 </form>
 
 <hr>
+<!-- ================= VIDEO LIST ================= -->
 
-<?php } ?>
-
-<!-- LIST VIDEOS -->
 <table>
-
 <tr>
 <th>Course</th>
 <th>Title</th>
 <th>Access</th>
+<th>Description</th>
 <th>Action</th>
 </tr>
 
-<?php while($v = $videos->fetch_assoc()) { ?>
+<?php
+$sql = "
+SELECT v.*, c.title AS course
+FROM course_videos v
+JOIN courses c ON c.id=v.course_id
+ORDER BY v.id DESC
+";
+
+$result = $conn->query($sql);
+
+while ($v = $result->fetch_assoc()) {
+?>
 
 <tr>
-<td><?php echo $v['course_title']; ?></td>
-<td><?php echo $v['title']; ?></td>
-<td><?php echo $v['access_type']; ?></td>
+<td><?= htmlspecialchars($v['course']) ?></td>
+<td><?= htmlspecialchars($v['title']) ?></td>
+<td><?= htmlspecialchars($v['access_type']) ?></td>
+<td><?= htmlspecialchars($v['description']) ?></td>
 
 <td>
-<a href="?view=<?php echo $v['id']; ?>" target="_blank">Watch</a>
+<a href="?view=<?= $v['id'] ?>">Watch</a>
 
-<?php if($user_role=="Teacher" || $user_role=="Admin"){ ?>
- | <a href="?delete=<?php echo $v['id']; ?>" onclick="return confirm('Delete video?')">Delete</a>
+<?php if (in_array($user_role,['admin','teacher'])) { ?>
+| <a href="?edit=<?= $v['id'] ?>">Edit</a>
+
+<form method="POST" style="display:inline;">
+<input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+<input type="hidden" name="video_id" value="<?= $v['id'] ?>">
+
+<button type="submit" name="delete_video"
+onclick="return confirm('Delete Video?')">
+Delete
+</button>
+</form>
 <?php } ?>
 
 </td>
@@ -2443,9 +2482,37 @@ while($c = $courses->fetch_assoc()){
 
 </table>
 
+<?php if(isset($video) && $video) { ?>
+
+<h2><?= htmlspecialchars($video['title']) ?></h2>
+<p><?= nl2br(htmlspecialchars($video['description'])) ?></p>
+
+<?php if (!empty($video['cloud_url'])) { ?>
+
+<iframe
+    src="<?= convertDriveLink($video['cloud_url']) ?>"
+    width="100%"
+    height="600"
+    allowfullscreen>
+</iframe>
+
+<?php } else { ?>
+
+<video width="100%" controls>
+    <source src="<?= htmlspecialchars($video['local_path']) ?>" type="video/mp4">
+</video>
+
+<?php } ?>
+
+<?php } else { ?>
+
+<p>Video not found.</p>
+
+<?php } ?>
+ 
+</div>
 </div>
 
-</div>
 
 <!== Quize == -- >
 <div class="box" id="quizeSection" style="display:none;">
@@ -3086,13 +3153,19 @@ th{
 
 <label>Select Course</label>
 
-<select name="course_id" required>
-    <option value="">-- Select Course --</option>
+<select name="course_id" onchange="this.form.submit()">
 
-    <?php while($c = mysqli_fetch_assoc($courses)) { ?>
-        <option value="<?= $c['id']; ?>">
-            <?= htmlspecialchars($c['title']); ?>
+    <option value="0">-- All Courses --</option>
+
+    <?php while($c = $courses->fetch_assoc()){ ?>
+
+        <option value="<?= (int)$c['id']; ?>"
+            <?= (isset($selected_course) && $selected_course == $c['id']) ? 'selected' : '' ?>>
+
+            <?= htmlspecialchars($c['title'], ENT_QUOTES, 'UTF-8'); ?>
+
         </option>
+
     <?php } ?>
 
 </select>
@@ -3117,8 +3190,9 @@ th{
 </form>
 
 </div>
+
 <!-- TABLE -->
-<table>
+<table  border="1" cellpadding="10" cellspacing="0">
 
 <tr>
 <th>Course</th>
@@ -3128,22 +3202,37 @@ th{
 <th>Action</th>
 </tr>
 
-<?php while($a = $announcements->fetch_assoc()) { ?>
+<?php if ($announcements && $announcements->num_rows > 0) { ?>
+
+    <?php while($a = $announcements->fetch_assoc()) { ?>
+
+    <tr>
+        <td><?= htmlspecialchars($a['course']); ?></td>
+        <td><?= htmlspecialchars($a['title']); ?></td>
+        <td><?= nl2br(htmlspecialchars($a['message'])); ?></td>
+        <td><?= htmlspecialchars($a['created_at']); ?></td>
+        <td>
+            <a class="delete"
+               href="?delete=<?= $a['id']; ?>"
+               onclick="return confirm('Delete announcement?')">
+               Delete
+            </a>
+        </td>
+    </tr>
+
+    <?php } ?>
+
+<?php } else { ?>
 
 <tr>
-<td><?php echo $a['course']; ?></td>
-<td><?php echo $a['title']; ?></td>
-<td><?php echo $a['message']; ?></td>
-<td><?php echo $a['created_at']; ?></td>
-<td>
-<a class="delete" href="?delete=<?php echo $a['id']; ?>" onclick="return confirm('Delete announcement?')">Delete</a>
-</td>
+    <td colspan="5" style="text-align:center;">
+        No announcements found
+    </td>
 </tr>
 
 <?php } ?>
 
 </table>
-
 
 </div>
 </div>
@@ -3294,6 +3383,9 @@ Reject
 
 </div>
 
+
+
+
 <!-- TICKET SECTION -->
 <div class="box" id="ticketSection" style="display:none;">
 <style>
@@ -3376,20 +3468,49 @@ Reject
             margin-bottom:15px;
         }
     </style>
-  <?php
+ 
+<?php
+if (isset($_POST['update_status'])) {
 
-/* UPDATE STATUS */
+    /* CSRF CHECK */
+    if (
+        !isset($_POST['csrf_token']) ||
+        !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])
+    ) {
+        die("Invalid CSRF token.");
+    }
 
-if(isset($_POST['update_status']))
-{
-    $ticket_id = intval($_POST['ticket_id']);
-    $status = $_POST['status'];
+    $ticket_id = (int)($_POST['ticket_id'] ?? 0);
+    $status = trim($_POST['status'] ?? '');
 
-    mysqli_query($conn,"
-        UPDATE tickets
-        SET status='$status'
-        WHERE id='$ticket_id'
-    ");
+    /* ALLOWED STATUSES */
+    $allowed_statuses = [
+        'open',
+        'in_progress',
+        'resolved',
+        'closed'
+    ];
+
+    if (
+        $ticket_id > 0 &&
+        in_array($status, $allowed_statuses, true)
+    ) {
+
+        $stmt = $conn->prepare("
+            UPDATE tickets
+            SET status = ?
+            WHERE id = ?
+        ");
+
+        $stmt->bind_param(
+            "si",
+            $status,
+            $ticket_id
+        );
+
+        $stmt->execute();
+        $stmt->close();
+    }
 }
 ?>
 
@@ -3408,68 +3529,77 @@ if(isset($_POST['update_status']))
 
 <?php
 
-$result = mysqli_query($conn,"
-SELECT
-    t.*,
-    u.full_name
-FROM tickets t
-LEFT JOIN users u
-ON u.id=t.user_id
-ORDER BY t.id DESC
+$stmt = $conn->prepare("
+    SELECT
+        t.*,
+        u.full_name
+    FROM tickets t
+    LEFT JOIN users u
+        ON u.id = t.user_id
+    ORDER BY t.id DESC
 ");
 
-while($row=mysqli_fetch_assoc($result))
-{
+$stmt->execute();
+$result = $stmt->get_result();
+
+while ($row = $result->fetch_assoc()) {
 ?>
 
 <tr>
 
-    <td><?= $row['full_name'] ?></td>
+    <td><?= htmlspecialchars($row['full_name'] ?? '') ?></td>
 
-    <td><?= $row['type'] ?></td>
+    <td><?= htmlspecialchars($row['type'] ?? '') ?></td>
 
-    <td><?= $row['subject'] ?></td>
+    <td><?= htmlspecialchars($row['subject'] ?? '') ?></td>
 
-    <td><?= $row['message'] ?></td>
+    <td><?= nl2br(htmlspecialchars($row['message'] ?? '')) ?></td>
 
-    <td><?= strtoupper($row['status']) ?></td>
+    <td><?= strtoupper(htmlspecialchars($row['status'] ?? '')) ?></td>
 
     <td>
 
         <form method="POST">
 
+            <!-- CSRF TOKEN -->
+            <input
+                type="hidden"
+                name="csrf_token"
+                value="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
+
             <input
                 type="hidden"
                 name="ticket_id"
-                value="<?= $row['id'] ?>">
+                value="<?= (int)$row['id'] ?>">
 
-            <select name="status">
+            <select name="status" required>
 
                 <option value="open"
-                <?= $row['status']=='open'?'selected':'' ?>>
-                Open
+                    <?= ($row['status'] === 'open') ? 'selected' : '' ?>>
+                    Open
                 </option>
 
                 <option value="in_progress"
-                <?= $row['status']=='in_progress'?'selected':'' ?>>
-                In Progress
+                    <?= ($row['status'] === 'in_progress') ? 'selected' : '' ?>>
+                    In Progress
                 </option>
 
                 <option value="resolved"
-                <?= $row['status']=='resolved'?'selected':'' ?>>
-                Resolved
+                    <?= ($row['status'] === 'resolved') ? 'selected' : '' ?>>
+                    Resolved
                 </option>
 
                 <option value="closed"
-                <?= $row['status']=='closed'?'selected':'' ?>>
-                Closed
+                    <?= ($row['status'] === 'closed') ? 'selected' : '' ?>>
+                    Closed
                 </option>
 
             </select>
 
             <button
                 type="submit"
-                name="update_status">
+                name="update_status"
+                onclick="return confirm('Update ticket status?')">
                 Update
             </button>
 
@@ -3479,23 +3609,17 @@ while($row=mysqli_fetch_assoc($result))
 
 </tr>
 
-<?php } ?>
+<?php
+}
+$stmt->close();
+?>
 
 </table>
-
 </div>
-
 
 <!-- PAYMENT SECTION -->
 <div class="box" id="paymentSection" style="display:none;">
 <style>
-body{
-    font-family: Arial;
-    background:#f4f6f9;
-    margin:0;
-    padding:20px;
-}
-
 .container{
     max-width:1200px;
     margin:auto;
@@ -3546,7 +3670,7 @@ th{
 
 a{
     text-decoration:none;
-    font-weight:bold;
+
 }
 </style>
 <div class="container">
@@ -3784,16 +3908,12 @@ ORDER BY p.created_at DESC"
 
 </div>
 
+
+
 <!== STUDENT SECTION == -- >
 <div class="box" id="studentsSection" style="display:none;">
-<style>
 
-body{
-    font-family:Arial;
-    background:#f4f6f9;
-    padding:20px;
-    margin:0;
-}
+<style>
 
 .container{
     max-width:1200px;
@@ -3821,26 +3941,23 @@ th,td{
 }
 
 button{
-    padding:6px 10px 6px 10px;
+    padding:6px 10px;
     border:none;
     border-radius:5px;
     cursor:pointer;
 }
 
 .btn-success{
-    margin:5px;
     background:#28a745;
     color:#fff;
 }
 
 .btn-warning{
-    margin:8px;
     background:#f0ad4e;
     color:#fff;
 }
 
 .btn-danger{
-    margin:7px;
     background:#dc3545;
     color:#fff;
 }
@@ -3857,11 +3974,13 @@ button{
     font-size:12px;
 }
 
-.active{
+.active,
+.approved{
     background:green;
 }
 
-.suspended{
+.suspended,
+.rejected{
     background:red;
 }
 
@@ -3869,187 +3988,286 @@ button{
     background:orange;
 }
 
-.approved{
-    background:green;
-}
-
-.rejected{
-    background:red;
-}
-
 select{
     padding:6px;
     border-radius:5px;
 }
 
-</style>
-</head>
+/* MODAL */
 
-<body>
+.modal{
+    display:none;
+    position:fixed;
+    z-index:9999;
+    left:0;
+    top:0;
+    width:100%;
+    height:100%;
+    background:rgba(0,0,0,.5);
+}
+
+.modal-content{
+    background:#fff;
+    width:400px;
+    max-width:90%;
+    margin:120px auto;
+    padding:20px;
+    border-radius:10px;
+    position:relative;
+}
+
+.close{
+    position:absolute;
+    right:15px;
+    top:10px;
+    font-size:28px;
+    cursor:pointer;
+}
+
+.modal input[type=password]{
+    width:100%;
+    padding:10px;
+    border:1px solid #ddd;
+    border-radius:5px;
+    margin:10px 0 15px;
+}
+
+</style>
 
 <div class="container">
 
-<!--  STUDENT RECORDS  -->
+    <?php if(isset($_SESSION['success'])){ ?>
 
-<div class="card">
+        <div style="
+            background:#d4edda;
+            color:#155724;
+            padding:12px;
+            margin-bottom:15px;
+            border-radius:6px;">
+            <?= htmlspecialchars($_SESSION['success']) ?>
+        </div>
 
-<h2>Student Records</h2>
+        <?php unset($_SESSION['success']); ?>
 
-<table>
+    <?php } ?>
 
-<tr>
-<th>ID</th>
-<th>Full Name</th>
-<th>Email</th>
-<th>Phone</th>
-<th>Registered</th>
-<th>Status</th>
-<th>Actions</th>
-</tr>
+    <!-- STUDENT RECORDS -->
 
-<?php while($s = mysqli_fetch_assoc($students)){ ?>
+    <div class="card">
 
-<tr>
+        <h2>Records</h2>
 
-<td><?= $s['id'] ?></td>
-<td><?= $s['full_name'] ?></td>
-<td><?= $s['email'] ?></td>
-<td><?= $s['phone'] ?></td>
-<td><?= $s['created_at'] ?></td>
+        <table>
 
-<td>
-    <span class="status <?= $s['status'] ?>">
-        <?= $s['status'] ?>
-    </span>
-</td>
+            <tr>
+                <th>ID</th>
+                <th>Full Name</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Registered</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
 
-<td>
+            <?php while($s = mysqli_fetch_assoc($students)) { ?>
 
-<form method="POST" style="display:inline;">
+            <tr>
 
-    <input 
-        type="hidden" 
-        name="student_id" 
-        value="<?= $s['id'] ?>"
-    >
+                <td><?= (int)$s['id'] ?></td>
 
-    <select name="action">
-        <option value="activate">Activate</option>
-        <option value="suspend">Suspend</option>
-        <option value="reset_password">Reset Password</option>
-        <option value="delete">Delete</option>
-    </select>
+                <td><?= htmlspecialchars($s['full_name']) ?></td>
 
-    <button 
-        type="submit"
-        class="btn-primary" 
-        name="student_action">
-        Go
-    </button>
+                <td><?= htmlspecialchars($s['email']) ?></td>
 
-</form>
+                <td><?= htmlspecialchars($s['phone'] ?? '') ?></td>
+                <td><?= htmlspecialchars($s['created_at']) ?></td>
 
-</td>
+                <td>
+                    <span class="status <?= strtolower(htmlspecialchars($s['status'])) ?>">
+                        <?= htmlspecialchars($s['status']) ?>
+                    </span>
+                </td>
 
-</tr>
+                <td>
 
-<?php } ?>
+                    <form method="POST" style="display:inline;">
 
-</table>
+                        <input
+                            type="hidden"
+                            name="student_id"
+                            value="<?= (int)$s['id'] ?>"
+                        >
+
+                        <select
+                            name="action"
+                            required
+                            onchange="studentAction(this, <?= (int)$s['id'] ?>)">
+
+                            <option value="">Select Action</option>
+                            <option value="activate">Activate</option>
+                            <option value="suspend">Suspend</option>
+                            <option value="reset_password">Reset Password</option>
+                            <option value="delete">Delete</option>
+
+                        </select>
+
+                        <button
+                            type="submit"
+                            name="student_action"
+                            class="btn-primary"
+                            onclick="return confirm('Proceed with this action?');">
+                            Go
+                        </button>
+
+                    </form>
+
+                </td>
+
+            </tr>
+
+            <?php } ?>
+
+        </table>
+
+    </div>
+
+    <!-- ENROLLMENT MONITORING -->
+
+    <div class="card">
+
+        <h2>Enrollment Monitoring</h2>
+
+        <table>
+
+            <tr>
+                <th>ID</th>
+                <th>Student</th>
+                <th>Course</th>
+                <th>Status</th>
+                <th>Progress %</th>
+                <th>Enrolled At</th>
+                <th>Actions</th>
+            </tr>
+
+            <?php while($e = mysqli_fetch_assoc($enrollments)){ ?>
+
+            <tr>
+
+                <td><?= (int)$e['id'] ?></td>
+
+                <td><?= htmlspecialchars($e['full_name']) ?></td>
+
+                <td><?= htmlspecialchars($e['title']) ?></td>
+
+                <td>
+                    <span class="status <?= strtolower(htmlspecialchars($e['status'])) ?>">
+                        <?= htmlspecialchars($e['status']) ?>
+                    </span>
+                </td>
+
+                <td><?= (int)$e['progress'] ?>%</td>
+
+                <td><?= htmlspecialchars($e['enrolled_at']) ?></td>
+
+                <td>
+
+                    <form method="POST">
+
+                        <input
+                            type="hidden"
+                            name="enroll_id"
+                            value="<?= (int)$e['id'] ?>"
+                        >
+
+                        <button
+                            type="submit"
+                            class="btn-success"
+                            name="action"
+                            value="approve">
+                            Approve
+                        </button>
+
+                        <button
+                            type="submit"
+                            class="btn-warning"
+                            name="action"
+                            value="reject">
+                            Reject
+                        </button>
+
+                        <button
+                            type="submit"
+                            class="btn-danger"
+                            name="action"
+                            value="delete"
+                            onclick="return confirm('Delete this enrollment?');">
+                            Delete
+                        </button>
+
+                        <input
+                            type="hidden"
+                            name="enroll_action"
+                            value="1"
+                        >
+
+                    </form>
+
+                </td>
+
+            </tr>
+
+            <?php } ?>
+
+        </table>
+
+    </div>
 
 </div>
 
-<!--  ENROLLMENT MONITORING  -->
+<!-- RESET PASSWORD MODAL -->
 
-<div class="card">
+<div id="resetPasswordModal" class="modal">
 
-<h2>Enrollment Monitoring</h2>
+    <div class="modal-content">
 
-<table>
+        <span class="close">&times;</span>
 
-<tr>
-<th>ID</th>
-<th>Student</th>
-<th>Course</th>
-<th>Status</th>
-<th>Progress %</th>
-<th>Enrolled At</th>
-<th>Actions</th>
-</tr>
+        <h3>Reset Student Password</h3>
 
-<?php while($e = mysqli_fetch_assoc($enrollments)){ ?>
+        <form method="POST">
 
-<tr>
+            <input
+                type="hidden"
+                name="student_id"
+                id="modal_student_id"
+            >
 
-<td><?= $e['id'] ?></td>
-<td><?= $e['full_name'] ?></td>
-<td><?= $e['title'] ?></td>
+            <label>New Password</label>
 
-<td>
-    <span class="status <?= $e['status'] ?>">
-        <?= $e['status'] ?>
-    </span>
-</td>
+            <input
+                type="password"
+                name="new_password"
+                minlength="6"
+                required
+            >
 
-<td><?= $e['progress'] ?>%</td>
-<td><?= $e['enrolled_at'] ?></td>
+            <button
+                type="submit"
+                name="reset_student_password"
+                class="btn-success">
+                Save Password
+            </button>
 
-<td>
+        </form>
 
-<form method="POST">
-
-    <input 
-        type="hidden" 
-        name="enroll_id" 
-        value="<?= $e['id'] ?>"
-    >
-
-    <button 
-        type="submit"
-        class="btn-success"
-        name="action"
-        value="approve">
-        Approve
-    </button>
-
-    <button 
-        type="submit"
-        class="btn-warning"
-        name="action"
-        value="reject">
-        Reject
-    </button>
-
-    <button 
-    type="submit"
-    class="btn-danger"
-    name="action"
-    value="delete"
-    onclick="return confirm('Delete this enrollment?')">
-    Delete
-    </button>
-
-    <input 
-        type="hidden" 
-        name="enroll_action" 
-        value="1"
-    >
-
-</form>
-
-</td>
-
-</tr>
-
-<?php } ?>
-
-</table>
+    </div>
 
 </div>
 
 </div>
 </div>
-</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
 function hideAllSections(){
@@ -4137,12 +4355,142 @@ function closeModal(id){
 
 // close when clicking outside
 window.onclick = function(e){
-    document.querySelectorAll('.modal').forEach(modal=>{
-        if(e.target == modal){
-            modal.style.display = "none";
-        }
-    });
+
+// close generic modals
+document.querySelectorAll('.modal').forEach(modal=>{
+    if(e.target === modal){
+        modal.style.display = "none";
+    }
+});
+
+// close reset password modal
+let resetModal = document.getElementById('resetPasswordModal');
+if(e.target === resetModal){
+    resetModal.style.display = "none";
 }
+};
+
+/* =========================
+   REVENUE GRAPH
+========================= */
+
+new Chart(document.getElementById('revenueChart'), {
+    type: 'line',
+    data: {
+        labels: <?= json_encode($revenue_labels) ?>,
+        datasets: [{
+            label: 'Revenue',
+            data: <?= json_encode($revenue_values) ?>,
+            borderWidth: 3,
+            tension: 0.3
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false
+    }
+});
+
+
+/* =========================
+   STUDENT GROWTH
+========================= */
+
+new Chart(document.getElementById('studentChart'), {
+    type: 'line',
+    data: {
+        labels: <?= json_encode($student_labels) ?>,
+        datasets: [{
+            label: 'Students',
+            data: <?= json_encode($student_values) ?>,
+            borderWidth: 3,
+            tension: 0.3
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false
+    }
+});
+
+
+/* =========================
+   ENROLLMENT TRENDS
+========================= */
+
+new Chart(document.getElementById('enrollmentChart'), {
+    type: 'bar',
+    data: {
+        labels: <?= json_encode($enrollment_labels) ?>,
+        datasets: [{
+            label: 'Enrollments',
+            data: <?= json_encode($enrollment_values) ?>,
+            borderWidth: 1
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false
+    }
+});
+
+
+/* =========================
+   PAYMENT STATUS PIE
+========================= */
+
+new Chart(document.getElementById('paymentChart'), {
+    type: 'pie',
+    data: {
+        labels: ['Successful', 'Pending', 'Failed'],
+        datasets: [{
+            data: [
+                <?= (int)$successful_payments ?>,
+                <?= (int)$pending_payments ?>,
+                <?= (int)$failed_payments ?>
+            ]
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false
+    }
+});
+
+
+/* =========================
+SECTION FOR STUDENT POP OUT
+========================= */
+
+function studentAction(select, studentId){
+
+    if(select.value === 'reset_password'){
+
+        document.getElementById('modal_student_id').value =
+            studentId;
+
+        document.getElementById(
+            'resetPasswordModal'
+        ).style.display = 'block';
+
+        select.selectedIndex = 0;
+    }
+}
+
+
+
+document.addEventListener('DOMContentLoaded', function(){
+
+    if(window.location.hash === '#studentsSection'){
+
+        document.getElementById(
+            'studentsSection'
+        ).style.display = 'block';
+    }
+
+});
+ 
 </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

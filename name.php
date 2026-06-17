@@ -2,184 +2,221 @@
 session_start();
 include 'db.php';
 
-/* =USER  */
-$user_id = $_SESSION['user_id'] ?? 1;
-
-/* = STATS = */
-$enrolled = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total FROM enrollments WHERE user_id='$user_id'"
-))['total'] ?? 0;
-
-$completed = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total FROM enrollments WHERE user_id='$user_id' AND status='completed'"
-))['total'] ?? 0;
-
-$ongoing = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total FROM enrollments WHERE user_id='$user_id' AND status='ongoing'"
-))['total'] ?? 0;
-
-$progress = ($enrolled > 0) ? round(($completed / $enrolled) * 100) : 0;
-
-/* = COURSES = */
-$courses = mysqli_query($conn,
-"SELECT c.title, e.progress 
-FROM courses c
-JOIN enrollments e ON c.id = e.course_id
-WHERE e.user_id='$user_id'
-LIMIT 5"
-);
-
-/* = ACTIVITIES = */
-$activities = mysqli_query($conn,
-"SELECT message, created_at 
-FROM activities 
-WHERE user_id='$user_id'
-ORDER BY created_at DESC
-LIMIT 5"
-);
-
-/*  BOOKMARKS */
-$bookmarks = mysqli_query($conn,
-"SELECT title, created_at 
-FROM bookmarks 
-WHERE user_id='$user_id'
-ORDER BY created_at DESC
-LIMIT 10"
-);
-
-/*quizzies */
-$quizStats = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT 
-    COUNT(*) AS total_quizzes
-FROM quiz_results
-WHERE user_id='$user_id'
-"))['total_quizzes'] ?? 0;
-
-$passed = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM quiz_results 
-WHERE user_id='$user_id' AND status='passed'"
-))['total'] ?? 0;
-
-$failed = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM quiz_results 
-WHERE user_id='$user_id' AND status='failed'"
-))['total'] ?? 0;
-
-$avgScore = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT AVG(score) AS avg_score 
-FROM quiz_results 
-WHERE user_id='$user_id'"
-))['avg_score'] ?? 0;
-
-$quizzes = mysqli_query($conn,
-"SELECT * FROM quizzes ORDER BY id DESC"
-);
-
-$results = mysqli_query($conn,
-"SELECT * FROM quiz_results 
-WHERE user_id='$user_id'
-ORDER BY created_at DESC
-LIMIT 5"
-);
-
-$history = mysqli_query($conn,
-"SELECT * FROM quiz_history 
-WHERE user_id='$user_id'
-ORDER BY completed_at DESC"
-);
-
-$achievements = mysqli_query($conn,
-"SELECT * FROM quiz_achievements 
-WHERE user_id='$user_id'"
-);
-
-$certs = mysqli_query($conn,
-"SELECT * FROM certificates"
-);
-
-/* NOTIFICATIONS  */
-
-$user_id = intval($user_id);
-
-$notifications = mysqli_query($conn, "
-
-SELECT
-    message,
-    created_at,
-    'notification' AS type
-FROM notifications
-WHERE user_id = $user_id
-
-UNION ALL
-
-SELECT
-    CONCAT('[Announcement] ', a.title, ' - ', a.message) AS message,
-    a.created_at,
-    'announcement' AS type
-FROM announcements a
-INNER JOIN enrollments e
-    ON e.course_id = a.course_id
-WHERE e.user_id = $user_id
-AND e.status IN ('approved','ongoing','completed')
-
-ORDER BY created_at DESC
-LIMIT 10
-
-");
-
-if(!$notifications){
-    die(mysqli_error($conn));
+/* =========================
+   AUTH CHECK (ONLY ONCE)
+========================= */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
 }
 
-/*  USER PROFILE  */
+$user_id = (int) $_SESSION['user_id'];
 
 /* =========================
-   GET USER PROFILE
+   ENROLLMENT STATS
 ========================= */
+$stmt = $conn->prepare("
+    SELECT 
+        COUNT(*) AS enrolled,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+        SUM(CASE WHEN status = 'ongoing' THEN 1 ELSE 0 END) AS ongoing,
+        AVG(progress) AS avg_progress
+    FROM enrollments
+    WHERE user_id = ?
+");
 
-$user_id = isset($_SESSION['user_id'])
-    ? (int)$_SESSION['user_id']
-    : 1; // remove fallback in production
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$data = $stmt->get_result()->fetch_assoc() ?? [];
 
+/* safe defaults */
+$enrolled  = (int)($data['enrolled'] ?? 0);
+$completed = (int)($data['completed'] ?? 0);
+$ongoing   = (int)($data['ongoing'] ?? 0);
+
+/* progress calculation */
+$progress = (float)($data['avg_progress'] ?? 0);
+$progress = round($progress);
+
+if ($progress == 0 && $enrolled > 0) {
+    $progress = round(($completed / $enrolled) * 100);
+}
+
+/* =========================
+   USER COURSES
+========================= */
+$stmt = $conn->prepare("
+    SELECT c.title, e.progress
+    FROM courses c
+    INNER JOIN enrollments e ON c.id = e.course_id
+    WHERE e.user_id = ?
+    LIMIT 5
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$courses = $stmt->get_result();
+
+/* =========================
+   ACTIVITIES
+========================= */
+$stmt = $conn->prepare("
+    SELECT message, created_at
+    FROM activities
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT 5
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$activities = $stmt->get_result();
+
+/* =========================
+   BOOKMARKS
+========================= */
+$stmt = $conn->prepare("
+    SELECT title, created_at
+    FROM bookmarks
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT 10
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$bookmarks = $stmt->get_result();
+
+/* =========================
+   QUIZ STATS (OPTIMIZED)
+========================= */
+$stmt = $conn->prepare("
+    SELECT 
+        COUNT(*) AS total_quizzes,
+        COALESCE(SUM(status='passed'),0) AS passed,
+        COALESCE(SUM(status='failed'),0) AS failed,
+        COALESCE(AVG(score),0) AS avg_score
+    FROM quiz_results
+    WHERE user_id = ?
+");
+
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+
+$quizStats = $stmt->get_result()->fetch_assoc();
+
+$total_quizzes = (int)($quizStats['total_quizzes'] ?? 0);
+$passed        = (int)($quizStats['passed'] ?? 0);
+$failed        = (int)($quizStats['failed'] ?? 0);
+$avgScore      = round((float)($quizStats['avg_score'] ?? 0), 1);
+/* =========================
+   QUIZ LISTS
+========================= */
+$quizzes = $conn->query("SELECT * FROM quizzes ORDER BY id DESC");
+
+$results = $conn->prepare("
+    SELECT * 
+    FROM quiz_results 
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT 5
+");
+$results->bind_param("i", $user_id);
+$results->execute();
+$results = $results->get_result();
+
+$history = $conn->prepare("
+    SELECT * 
+    FROM quiz_history 
+    WHERE user_id = ?
+    ORDER BY completed_at DESC
+");
+$history->bind_param("i", $user_id);
+$history->execute();
+$history = $history->get_result();
+
+$achievements = $conn->prepare("
+    SELECT * 
+    FROM quiz_achievements 
+    WHERE user_id = ?
+");
+$achievements->bind_param("i", $user_id);
+$achievements->execute();
+$achievements = $achievements->get_result();
+
+$certs = $conn->query("SELECT * FROM certificates");
+
+/* =========================
+   NOTIFICATIONS (FIXED)
+========================= */
+$stmt = $conn->prepare("
+    SELECT
+        message,
+        created_at AS notification_date,
+        'notification' AS type
+    FROM notifications
+    WHERE user_id = ?
+
+    UNION ALL
+
+    SELECT
+        CONCAT('[Announcement] ', a.title, ' - ', a.message) AS message,
+        a.created_at AS notification_date,
+        'announcement' AS type
+    FROM announcements a
+    INNER JOIN enrollments e ON e.course_id = a.course_id
+    WHERE e.user_id = ?
+      AND e.status IN ('approved','ongoing','completed')
+
+    ORDER BY notification_date DESC
+    LIMIT 10
+");
+
+$stmt->bind_param("ii", $user_id, $user_id);
+$stmt->execute();
+$notifications = $stmt->get_result();
+
+/* =========================
+   USER PROFILE
+========================= */
 $stmt = $conn->prepare("
     SELECT *
     FROM users
     WHERE id = ?
     LIMIT 1
 ");
-
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
-
 $profile = $stmt->get_result()->fetch_assoc();
 
-/* FALLBACK */
-
+/* fallback */
 if (!$profile) {
-
     $profile = [
-        'full_name'   => 'Unknown User',
-        'email'       => '',
-        'phone'       => '',
-        'location'    => '',
-        'bio'         => '',
-        'created_at'  => date('Y-m-d')
+        'full_name'     => 'Unknown User',
+        'email'         => '',
+        'phone'         => '',
+        'location'      => '',
+        'bio'           => '',
+        'profile_image' => '',
+        'created_at'    => date('Y-m-d')
     ];
+}
+
+/* =========================
+   CSRF TOKEN (ONLY ONCE)
+========================= */
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 /* =========================
    UPDATE PROFILE
 ========================= */
+if (isset($_POST['update_profile'])) {
 
-if (isset($_POST['update_profile']))
-{
-    if (!isset($_SESSION['user_id'])) {
-        die("Please login first.");
+    /* =========================
+       CSRF CHECK
+    ========================= */
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die("Invalid CSRF token. Request blocked.");
     }
-
-    $user_id = (int)$_SESSION['user_id'];
 
     $full_name = trim($_POST['full_name'] ?? '');
     $email     = trim($_POST['email'] ?? '');
@@ -190,11 +227,9 @@ if (isset($_POST['update_profile']))
     /* =========================
        UPDATE USERS TABLE
     ========================= */
-
     $stmt = $conn->prepare("
         UPDATE users
-        SET
-            full_name = ?,
+        SET full_name = ?,
             email = ?,
             phone = ?,
             location = ?,
@@ -217,11 +252,9 @@ if (isset($_POST['update_profile']))
     /* =========================
        UPDATE STUDENTS TABLE
     ========================= */
-
     $stmt = $conn->prepare("
         UPDATE students
-        SET
-            full_name = ?,
+        SET full_name = ?,
             email = ?,
             phone = ?
         WHERE user_id = ?
@@ -240,7 +273,6 @@ if (isset($_POST['update_profile']))
     /* =========================
        REFRESH PROFILE DATA
     ========================= */
-
     $stmt = $conn->prepare("
         SELECT *
         FROM users
@@ -250,177 +282,244 @@ if (isset($_POST['update_profile']))
 
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
-
     $profile = $stmt->get_result()->fetch_assoc();
 
-    echo "
-<script>
-    alert('Profile updated successfully');
-    window.location.href='name.php?section=profile';
-</script>
+    /* =========================
+       ROTATE CSRF TOKEN
+    ========================= */
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+    echo "<script>
+        alert('Profile updated successfully');
+        window.location.href='name.php?section=profile';
+    </script>";
+    exit;
+}
+
+/* =========================
+   ENROLLED COURSES COUNT
+========================= */
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM enrollments
+    WHERE user_id = ?
+      AND status IN ('approved', 'ongoing')
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$active_courses = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
+
+/* =========================
+   COURSE STATS (CLEAN + NO DUPLICATES)
+========================= */
+$stmt = $conn->prepare("
+    SELECT
+        COUNT(*) AS total_courses,
+        SUM(status='ongoing') AS active_courses,
+        SUM(status='completed') AS completed_courses
+    FROM enrollments
+    WHERE user_id = ?
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$courseStats = $stmt->get_result()->fetch_assoc() ?? [];
+
+$total_courses     = $courseStats['total_courses'] ?? 0;
+$active_courses    = $courseStats['active_courses'] ?? 0;
+$completed_courses = $courseStats['completed_courses'] ?? 0;
+
+/* =========================
+   CERTIFICATES
+========================= */
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM certificates
+    WHERE user_id = ?
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$certificates_earned = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
+
+/* =========================
+   ACTIVE COURSES LIST
+========================= */
+$stmt = $conn->prepare("
+    SELECT 
+        c.id,
+        c.title,
+        c.teacher_id,
+        c.lessons,
+        e.progress
+    FROM enrollments e
+    INNER JOIN courses c ON e.course_id = c.id
+    WHERE e.user_id = ?
+      AND e.status = 'ongoing'
+    ORDER BY e.id DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$active_courses_list = $stmt->get_result();
+
+/* =========================
+   COMPLETED COURSES LIST
+========================= */
+$stmt = $conn->prepare("
+    SELECT 
+        c.title,
+        e.completed_at
+    FROM enrollments e
+    INNER JOIN courses c ON e.course_id = c.id
+    WHERE e.user_id = ?
+      AND e.status = 'completed'
+    ORDER BY e.completed_at DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$completed_courses_list = $stmt->get_result();
+
+/* =========================
+   ASSIGNMENTS
+========================= */
+$stmt = $conn->prepare("
+    SELECT a.*
+    FROM assignments a
+    INNER JOIN enrollments e ON e.course_id = a.course_id
+    WHERE e.user_id = ?
+    ORDER BY a.due_date ASC
+    LIMIT 10
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$assignments = $stmt->get_result();
+
+/* =========================
+   COURSE MATERIALS
+========================= */
+$materials = $conn->query("
+    SELECT * FROM course_materials
+    ORDER BY id DESC
+    LIMIT 10
+");
+
+/* =========================
+   LIVE CLASSES
+========================= */
+$live_classes = $conn->query("
+    SELECT * FROM live_classes
+    ORDER BY schedule_time ASC
+    LIMIT 10
+");
+
+/* =========================
+   BROWSE COURSES
+========================= */
+$search = trim($_GET['search'] ?? '');
+
+$sql = "
+SELECT 
+    c.id,
+    c.title,
+    c.description,
+    c.price,
+    c.lessons,
+    c.enrolled_students,
+    c.teacher_id
+FROM courses c
+WHERE c.status = 'Active'
 ";
-exit;
-}
-/*  ENROLLED COURSES COUNT  */
 
-$total_courses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM enrollments 
-WHERE user_id='$user_id'"
-))['total'] ?? 0;
-
-/* COURSE STATS  */
-
-$total_courses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM enrollments 
-WHERE user_id='$user_id'"
-))['total'] ?? 0;
-
-$active_courses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM enrollments 
-WHERE user_id='$user_id'
-AND status='ongoing'"
-))['total'] ?? 0;
-
-$completed_courses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM enrollments 
-WHERE user_id='$user_id'
-AND status='completed'"
-))['total'] ?? 0;
-
-$certificates_earned = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total 
-FROM certificates 
-WHERE user_id='$user_id'"
-))['total'] ?? 0;
-
-/*  ACTIVE COURSES  */
-
-$active_courses_list = mysqli_query($conn,
-"SELECT 
-courses.id,
-courses.title,
-courses.instructor,
-courses.lessons,
-enrollments.progress
-FROM enrollments
-INNER JOIN courses 
-ON enrollments.course_id = courses.id
-WHERE enrollments.user_id='$user_id'
-AND enrollments.status='ongoing'
-ORDER BY enrollments.id DESC"
-);
-
-/*  COMPLETED COURSES  */
-
-$completed_courses_list = mysqli_query($conn,
-"SELECT 
-courses.title,
-enrollments.completed_at
-FROM enrollments
-INNER JOIN courses 
-ON enrollments.course_id = courses.id
-WHERE enrollments.user_id='$user_id'
-AND enrollments.status='completed'
-ORDER BY enrollments.completed_at DESC"
-);
-
-/*  ASSIGNMENTS */
-
-$assignments = mysqli_query($conn,
-"SELECT a.*
-FROM assignments a
-INNER JOIN enrollments e ON e.course_id = a.course_id
-WHERE e.user_id = '$user_id'
-ORDER BY a.due_date ASC
-LIMIT 10"
-);
-/*  COURSE MATERIALS  */
-
-$materials = mysqli_query($conn,
-"SELECT * FROM course_materials
-ORDER BY id DESC
-LIMIT 10"
-);
-
-/* LIVE CLASSES  */
-
-$live_classes = mysqli_query($conn,
-"SELECT * FROM live_classes
-ORDER BY schedule_time ASC
-LIMIT 10"
-);
-
-/* BROWSE COURSES BACKEND */
-
- // SEARCH VALUE
-$search = $_GET['search'] ?? '';
-$search = trim($search);
-
-/*   FETCH FEATURED  ALL COURSES */
-
-if($search != ""){
-
+if ($search !== '') {
     $safe_search = mysqli_real_escape_string($conn, $search);
-
-    $browseCourses = mysqli_query($conn,
-    "SELECT *
-    FROM courses
-    WHERE title LIKE '%$safe_search%'
-    OR description LIKE '%$safe_search%'
-    OR instructor LIKE '%$safe_search%'
-    ORDER BY created_at DESC");
-
-}else{
-
-    $browseCourses = mysqli_query($conn,
-    "SELECT *
-    FROM courses
-    ORDER BY created_at DESC
-    LIMIT 12");
-
+    $sql .= " AND c.title LIKE '%$safe_search%'";
 }
 
-/* TRENDING COURSES */
+$sql .= " ORDER BY c.created_at DESC";
 
-$trendingCourses = mysqli_query($conn,
-"SELECT title, enrolled_students
-FROM courses
-ORDER BY enrolled_students DESC
-LIMIT 5");
+$browseCourses = mysqli_query($conn, $sql);
 
-/*  TOP INSTRUCTORS */
+/* =========================
+   CATEGORIES (FROM DB ONLY)
+========================= */
+$cat_result = mysqli_query($conn, "
+    SELECT DISTINCT category 
+    FROM courses 
+    WHERE status='Active'
+");
 
-$topInstructors = mysqli_query($conn,
-"SELECT *
-FROM instructors
-ORDER BY rating DESC
-LIMIT 5");
+$categories = [];
+while ($row = mysqli_fetch_assoc($cat_result)) {
+    $categories[] = $row['category'];
+}
 
-/* COURSE BENEFITS */
+/* =========================
+   ENRICH COURSES (SAFE LOOP)
+========================= */
+$browseCoursesData = [];
 
+while ($course = mysqli_fetch_assoc($browseCourses)) {
+
+    $course['instructor'] = 'Unknown';
+
+    if (!empty($course['teacher_id'])) {
+
+        $teacher_id = (int)$course['teacher_id'];
+
+        $stmt = $conn->prepare("
+            SELECT u.full_name
+            FROM teachers t
+            INNER JOIN users u ON u.id = t.user_id
+            WHERE t.id = ?
+            LIMIT 1
+        ");
+
+        $stmt->bind_param("i", $teacher_id);
+        $stmt->execute();
+        $t = $stmt->get_result()->fetch_assoc();
+
+        if ($t) {
+            $course['instructor'] = $t['full_name'];
+        }
+    }
+
+    $browseCoursesData[] = $course;
+}
+
+/* =========================
+   TRENDING COURSES
+========================= */
+$trendingCourses = $conn->query("
+    SELECT title, enrolled_students
+    FROM courses
+    WHERE status='Active'
+    ORDER BY enrolled_students DESC
+    LIMIT 5
+");
+
+/* =========================
+   TOP INSTRUCTORS
+========================= */
+$topInstructors = $conn->query("
+    SELECT 
+        u.full_name,
+        t.specialization,
+        t.experience_years,
+        COUNT(c.id) AS courses_count
+    FROM teachers t
+    INNER JOIN users u ON u.id = t.user_id
+    LEFT JOIN courses c ON c.teacher_id = t.id
+    GROUP BY t.id, u.full_name, t.specialization, t.experience_years
+    ORDER BY courses_count DESC
+    LIMIT 5
+");
+
+/* =========================
+   STATIC BENEFITS
+========================= */
 $courseBenefits = [
-    [
-        "title" => "Industry Expert Instructors",
-        "description" => "Learn from experienced professionals"
-    ],
-    [
-        "title" => "Certificates After Completion",
-        "description" => "Boost your professional portfolio"
-    ],
-    [
-        "title" => "Lifetime Access",
-        "description" => "Study anytime at your own pace"
-    ],
-    [
-        "title" => "Practical Projects",
-        "description" => "Build real-world applications"
-    ]
+    ["title" => "Learn Anytime", "description" => "Access courses 24/7 from any device."],
+    ["title" => "Expert Instructors", "description" => "Learn from industry professionals."],
+    ["title" => "Certified Learning", "description" => "Get certificates after completion."]
 ];
-
 /*    COURSE CATEGORIES  */
 
 $categories = [
@@ -433,76 +532,105 @@ $categories = [
 ];
 
 /* SUMMARY STATS */
+/* =========================
+   PROGRESS STATS
+========================= */
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM enrollments
+    WHERE user_id = ?
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$progressTotalCourses = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-$progressTotalCourses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total
-FROM enrollments
-WHERE user_id='$user_id'"
-))['total'] ?? 0;
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM enrollments
+    WHERE user_id = ? AND status='completed'
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$progressCompletedCourses = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-$progressCompletedCourses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total
-FROM enrollments
-WHERE user_id='$user_id'
-AND status='completed'"
-))['total'] ?? 0;
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM enrollments
+    WHERE user_id = ? AND status='ongoing'
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$progressOngoingCourses = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-$progressOngoingCourses = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total
-FROM enrollments
-WHERE user_id='$user_id'
-AND status='ongoing'"
-))['total'] ?? 0;
-
+/* =========================
+   OVERALL PROGRESS
+========================= */
 $overallProgress = 0;
 
-if($progressTotalCourses > 0){
-
+if ($progressTotalCourses > 0) {
     $overallProgress = round(
         ($progressCompletedCourses / $progressTotalCourses) * 100
     );
 }
 
-/* COURSE PROGRESS */
+/* =========================
+   COURSE PROGRESS LIST
+========================= */
+$stmt = $conn->prepare("
+    SELECT
+        c.title,
+        e.progress,
+        e.status
+    FROM enrollments e
+    INNER JOIN courses c ON e.course_id = c.id
+    WHERE e.user_id = ?
+    ORDER BY e.progress DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$courseProgress = $stmt->get_result();
 
-$courseProgress = mysqli_query($conn,
-"SELECT
-courses.title,
-enrollments.progress,
-enrollments.status
-FROM enrollments
-INNER JOIN courses
-ON enrollments.course_id = courses.id
-WHERE enrollments.user_id='$user_id'
-ORDER BY enrollments.progress DESC");
+/* =========================
+   QUIZ PERFORMANCE
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM quiz_results
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT 10
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$quizPerformance = $stmt->get_result();
 
-/* QUIZ PERFORMANCE */
+/* =========================
+   CERTIFICATES
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM certificates
+    WHERE user_id = ?
+    ORDER BY issued_at DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$progressCertificates = $stmt->get_result();
 
-$quizPerformance = mysqli_query($conn,
-"SELECT *
-FROM quiz_results
-WHERE user_id='$user_id'
-ORDER BY created_at DESC
-LIMIT 10");
+/* =========================
+   LEARNING ANALYTICS
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM learning_stats
+    WHERE user_id = ?
+    LIMIT 1
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$analytics = $stmt->get_result()->fetch_assoc();
 
-/* CERTIFICATES */
-
-$progressCertificates = mysqli_query($conn,
-"SELECT *
-FROM certificates
-WHERE user_id='$user_id'
-ORDER BY issued_at DESC");
-
-/* LEARNING ANALYTICS */
-
-$analytics = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT *
-FROM learning_stats
-WHERE user_id='$user_id'
-LIMIT 1"));
-
-if(!$analytics){
-
+if (!$analytics) {
     $analytics = [
         'study_hours' => 0,
         'lessons_completed' => 0,
@@ -510,231 +638,213 @@ if(!$analytics){
     ];
 }
 
-/* RECENT ACHIEVEMENTS */
-
+/* =========================
+   ACHIEVEMENTS
+========================= */
 $progressAchievements = [];
 
-/* COMPLETED COURSES */
-
-if($progressCompletedCourses > 0){
-
+/* Completed courses */
+if ($progressCompletedCourses > 0) {
     $progressAchievements[] = [
         "title" => "🏆 Completed Courses",
-        "description" =>
-        "$progressCompletedCourses courses completed successfully"
+        "description" => "$progressCompletedCourses courses completed successfully"
     ];
 }
 
-/* LEARNING PROGRESS */
-
-if($overallProgress >= 50){
-
+/* Learning progress */
+if ($overallProgress >= 50) {
     $progressAchievements[] = [
         "title" => "🔥 Learning Progress",
-        "description" =>
-        "You reached $overallProgress% learning progress"
+        "description" => "You reached $overallProgress% learning progress"
     ];
 }
 
-/* TOP QUIZ PERFORMANCE */
+/* Top quiz */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM quiz_results
+    WHERE user_id = ?
+    ORDER BY score DESC
+    LIMIT 1
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$topQuiz = $stmt->get_result()->fetch_assoc();
 
-$topQuiz = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT *
-FROM quiz_results
-WHERE user_id='$user_id'
-ORDER BY score DESC
-LIMIT 1"));
-
-if($topQuiz){
-
+if ($topQuiz) {
     $progressAchievements[] = [
         "title" => "⭐ Top Quiz Performer",
-        "description" =>
-        $topQuiz['quiz_title'] .
-        " - Score: " .
-        $topQuiz['score'] . "%"
+        "description" => $topQuiz['quiz_title'] . " - Score: " . $topQuiz['score'] . "%"
     ];
 }
 
-/*   PAYMENTS & BILLING  */
+/* =========================
+   PAYMENTS & BILLING
+========================= */
 
-/* TOTAL PAID */
-$totalPaidRow = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COALESCE(SUM(amount),0) AS total
-FROM payments
-WHERE user_id='$user_id' AND status='success'"
-));
-$totalPaid = $totalPaidRow['total'] ?? 0;
+/* Total paid */
+$stmt = $conn->prepare("
+    SELECT COALESCE(SUM(amount),0) AS total
+    FROM payments
+    WHERE user_id = ? AND status='success'
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$totalPaid = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-/* PENDING */
-$pendingRow = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COALESCE(SUM(amount),0) AS total
-FROM payments
-WHERE user_id='$user_id' AND status='pending'"
-));
-$pendingPayments = $pendingRow['total'] ?? 0;
+/* Pending payments */
+$stmt = $conn->prepare("
+    SELECT COALESCE(SUM(amount),0) AS total
+    FROM payments
+    WHERE user_id = ? AND status='pending'
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$pendingPayments = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-/* SUCCESS TRANSACTIONS */
-$transactionsCountRow = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total
-FROM payments
-WHERE user_id='$user_id' AND status='success'"
-));
-$totalTransactions = $transactionsCountRow['total'] ?? 0;
+/* Transactions count */
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM payments
+    WHERE user_id = ? AND status='success'
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$totalTransactions = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-/* INVOICES */
-$invoiceCountRow = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT COUNT(*) AS total
-FROM invoices
-WHERE user_id='$user_id'"
-));
-$invoiceCount = $invoiceCountRow['total'] ?? 0;
+/* Invoices count */
+$stmt = $conn->prepare("
+    SELECT COUNT(*) AS total
+    FROM invoices
+    WHERE user_id = ?
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$invoiceCount = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-/* TRANSACTIONS  */
+/* =========================
+   TRANSACTIONS LIST
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM payments
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$transactions = $stmt->get_result();
 
-$transactions = mysqli_query($conn,
-"SELECT *
-FROM payments
-WHERE user_id='$user_id'
-ORDER BY created_at DESC"
-);
+/* =========================
+   INVOICES LIST
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM invoices
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$invoices = $stmt->get_result();
 
-/*  INVOICES  */
+/* =========================
+   PAYMENT METHODS
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM payment_methods
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$paymentMethods = $stmt->get_result();
 
-$invoices = mysqli_query($conn,
-"SELECT *
-FROM invoices
-WHERE user_id='$user_id'
-ORDER BY created_at DESC"
-);
+/* =========================
+   PAYMENT FORM (FIXED)
+========================= */
+if (isset($_POST['submit_payment'])) {
 
-/*  PAYMENT METHODS  */
+    $course_id = (int) $_POST['course_id'];
+    $amount    = (float) $_POST['amount'];
+    $method    = trim($_POST['payment_method']);
+    $phone     = trim($_POST['payer_phone']);
 
-$paymentMethods = mysqli_query($conn,
-"SELECT *
-FROM payment_methods
-WHERE user_id='$user_id'
-ORDER BY created_at DESC"
-);
+    /* course fetch */
+    $stmt = $conn->prepare("
+        SELECT title
+        FROM courses
+        WHERE id = ?
+    ");
+    $stmt->bind_param("i", $course_id);
+    $stmt->execute();
+    $course = $stmt->get_result()->fetch_assoc();
 
-
-/*  PAYMENT  FORM */
-
-if(isset($_POST['submit_payment'])){
-
-    $user_id = $_SESSION['user_id'];
-
-    $course_id = intval($_POST['course_id']);
-
-    $amount = floatval($_POST['amount']);
-
-    $method = $_POST['payment_method'];
-
-    $phone = trim($_POST['payer_phone']);
-
-    $course = mysqli_fetch_assoc(
-        mysqli_query(
-            $conn,
-            "SELECT * FROM courses WHERE id='$course_id'"
-        )
-    );
-
-    if($course){
+    if ($course) {
 
         $courseTitle = $course['title'];
+        $invoiceNo = "INV" . time();
 
-        $invoiceNo =
-            "INV".time();
-
-        mysqli_query($conn,"
-        INSERT INTO payments
-        (
-            user_id,
-            course_id,
-            payer_name,
-            payer_phone,
-            amount,
-            payment_method,
-            status,
-            verification_status
-        )
-        VALUES
-        (
-            '$user_id',
-            '$course_id',
-            'Student',
-            '$phone',
-            '$amount',
-            '$method',
-            'success',
-            'verified'
-        )
+        /* payment insert */
+        $stmt = $conn->prepare("
+            INSERT INTO payments
+            (user_id, course_id, payer_name, payer_phone, amount, payment_method, status, verification_status)
+            VALUES (?, ?, 'Student', ?, ?, ?, 'success', 'verified')
         ");
+        $stmt->bind_param("iisds", $user_id, $course_id, $phone, $amount, $method);
+        $stmt->execute();
 
-        $exists =
-        mysqli_query(
-        $conn,
-        "SELECT id
-         FROM enrollments
-         WHERE user_id='$user_id'
-         AND course_id='$course_id'"
-        );
+        /* enrollment check */
+        $stmt = $conn->prepare("
+            SELECT id FROM enrollments
+            WHERE user_id = ? AND course_id = ?
+        ");
+        $stmt->bind_param("ii", $user_id, $course_id);
+        $stmt->execute();
+        $exists = $stmt->get_result();
 
-        if(mysqli_num_rows($exists)==0){
+        if ($exists->num_rows == 0) {
 
-            mysqli_query($conn,"
-            INSERT INTO enrollments
-            (
-                user_id,
-                course_id,
-                progress,
-                status
-            )
-            VALUES
-            (
-                '$user_id',
-                '$course_id',
-                0,
-                'approved'
-            )
+            $stmt = $conn->prepare("
+                INSERT INTO enrollments
+                (user_id, course_id, progress, status)
+                VALUES (?, ?, 0, 'approved')
             ");
-
+            $stmt->bind_param("ii", $user_id, $course_id);
+            $stmt->execute();
         }
 
-        mysqli_query($conn,"
-        INSERT INTO invoices
-        (
-            user_id,
-            invoice_no,
-            description,
-            status
-        )
-        VALUES
-        (
-            '$user_id',
-            '$invoiceNo',
-            'Payment for $courseTitle',
-            'paid'
-        )
+        /* invoice */
+        $stmt = $conn->prepare("
+            INSERT INTO invoices
+            (user_id, invoice_no, description, status)
+            VALUES (?, ?, ?, 'paid')
         ");
+        $stmt->bind_param("iss", $user_id, $invoiceNo, $courseTitle);
+        $stmt->execute();
 
-        echo "
-        <script>
-        alert('Payment Successful. Enrollment Activated.');
-        location.href=location.href;
+        echo "<script>
+            alert('Payment Successful. Enrollment Activated.');
+            location.href = location.href;
         </script>";
     }
 }
-/* SETTINGS SECTION BACKEND */
 
-$settingsRow = mysqli_fetch_assoc(mysqli_query($conn,
-"SELECT *
-FROM user_settings
-WHERE user_id='$user_id'
-LIMIT 1"
-));
+/* =========================
+   SETTINGS
+========================= */
+$stmt = $conn->prepare("
+    SELECT *
+    FROM user_settings
+    WHERE user_id = ?
+    LIMIT 1
+");
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$settingsRow = $stmt->get_result()->fetch_assoc();
 
-if(!$settingsRow){
+if (!$settingsRow) {
     $settingsRow = [
         'theme' => 'light',
         'email_notifications' => 1,
@@ -743,39 +853,38 @@ if(!$settingsRow){
     ];
 }
 
-/* ATTENDANCE SECTION 
-$user_id = $_SESSION['user_id'] ?? 0;
-
-if($user_id == 0){
-    die("Please login first");
-}
- =========================
-   SIGN ATTENDANCE
+/* =========================
+   ATTENDANCE (FIXED)
 ========================= */
-if(isset($_POST['sign_attendance'])) {
+if (isset($_POST['sign_attendance'])) {
 
-    $course_id = intval($_POST['course_id']);
+    $course_id = (int) $_POST['course_id'];
 
-    if($course_id <= 0){
+    if ($course_id <= 0) {
         echo "<script>alert('Please select a course');</script>";
     } else {
 
-        // check duplicate attendance today
-        $check = mysqli_query($conn, "
-            SELECT * FROM attendance
-            WHERE user_id='$user_id'
-            AND course_id='$course_id'
-            AND DATE(signed_at)=CURDATE()
+        $stmt = $conn->prepare("
+            SELECT id
+            FROM attendance
+            WHERE user_id = ?
+              AND course_id = ?
+              AND DATE(attendance_date) = CURDATE()
         ");
+        $stmt->bind_param("ii", $user_id, $course_id);
+        $stmt->execute();
+        $check = $stmt->get_result();
 
-        if(mysqli_num_rows($check) > 0){
+        if ($check->num_rows > 0) {
             echo "<script>alert('You already signed attendance today');</script>";
         } else {
 
-            mysqli_query($conn, "
-            INSERT INTO attendance (user_id, course_id, attendance_date, status)
-            VALUES ('$user_id', '$course_id', CURDATE(), 'present');
+            $stmt = $conn->prepare("
+                INSERT INTO attendance (user_id, course_id, attendance_date, status)
+                VALUES (?, ?, CURDATE(), 'present')
             ");
+            $stmt->bind_param("ii", $user_id, $course_id);
+            $stmt->execute();
 
             echo "<script>alert('Attendance signed successfully');</script>";
         }
@@ -791,9 +900,9 @@ if(isset($_POST['sign_attendance'])) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Student Dashboard</title>
-
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-
+<link rel="stylesheet" href="Advance.css">
 
 <style>
 *{
@@ -1075,7 +1184,7 @@ body{
  */
 .btn{
     border:none;
-    background:#2563eb;
+    background:green;
     color:#fff;
     padding:13px 22px;
     border-radius:12px;
@@ -1087,6 +1196,7 @@ body{
     display:inline-flex;
     align-items:center;
     gap:10px;
+    width: 10rem;
 }
 
 .btn:hover{
@@ -1094,250 +1204,6 @@ body{
     transform:translateY(-2px);
 }
 
-/* 
-   PROFILE
- */
-.profile-box{
-    width:100%;
-    background:#fff;
-    border-radius:20px;
-    padding:30px;
-    box-shadow:0 4px 15px rgba(0,0,0,.06);
-    display:none;
-}
-
-.profile-header{
-    display:flex;
-    align-items:center;
-    gap:25px;
-    flex-wrap:wrap;
-    margin-bottom:35px;
-}
-
-.profile-image img{
-    width:120px;
-    height:120px;
-    border-radius:50%;
-    object-fit:cover;
-    border:4px solid #2563eb;
-}
-
-.profile-info h2{
-    color:#0f172a;
-    font-size:28px;
-    margin-bottom:8px;
-}
-
-.profile-info p{
-    color:#64748b;
-}
-
-/* 
-   PROFILE ACTIONS
- */
-.profile-actions{
-    display:flex;
-    gap:15px;
-    flex-wrap:wrap;
-    margin:25px 0;
-}
-
-.action-btn{
-    border:none;
-    padding:12px 20px;
-    border-radius:12px;
-    color:#fff;
-    font-weight:600;
-    cursor:pointer;
-    transition:.3s;
-    background-color:#49d7d2;
-}
-
-.edit-btn{
-    background:#2563eb;
-}
-
-.password-btn{
-    background:#2563eb;
-}
-
-.photo-btn{
-    background:#2563eb;
-}
-
-.action-btn:hover{
-    transform:translateY(-3px);
-}
-
-/* 
-   DETAIL CARDS
- */
-.detail-card{
-    background:#fff;
-    border:1px solid #e2e8f0;
-    border-radius:16px;
-    padding:22px;
-    transition:.3s;
-}
-
-.detail-card:hover{
-    transform:translateY(-5px);
-    border-color:#2563eb;
-    box-shadow:0 10px 20px rgba(0,0,0,.08);
-}
-
-.detail-card h4{
-    color:#2563eb;
-    margin-bottom:10px;
-}
-
-.detail-card p{
-    color:#475569;
-    line-height:1.7;
-}
-
-.full-width{
-    grid-column:1/-1;
-}
-
-/* 
-   MODALS
- */
-.modal,
-.payment-modal,
-.profile-modal{
-    position:fixed;
-    inset:0;
-    background:rgba(15,23,42,.65);
-    display:none;
-    justify-content:center;
-    align-items:center;
-    padding:20px;
-    z-index:99999;
-    backdrop-filter:blur(5px);
-}
-
-.modal-box,
-.payment-content,
-.modal-content
-{
-    width:100%;
-    padding:20px;
-    max-width:700px;
-    background:#fff;
-    border-radius:22px;
-    overflow:hidden;
-    animation:popup .3s ease;
-    max-height:90vh;
-    overflow-y:auto;
-}
-
-/* 
-   ANIMATION
- */
-@keyframes popup{
-    from{
-        opacity:0;
-        transform:translateY(-20px) scale(.95);
-    }
-    to{
-        opacity:1;
-        transform:translateY(0) scale(1);
-    }
-}
-
-/* 
-   MODAL HEADER
- */
-.modal-header{
-    background:linear-gradient(135deg,#2563eb,#1d4ed8);
-    color:#fff;
-    padding:20px 25px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-}
-
-.modal-header h3{
-    margin:0;
-    font-size:22px;
-}
-
-.close,
-.close-btn,
-.close-payment{
-    color:#fff;
-    font-size:28px;
-    cursor:pointer;
-}
-
-/* 
-   FORMS
- */
-.modal form,
-{
-    padding:25px;
-}
-.payment-content form{
-    padding:30px;
-}
-
-.form-group{
-    margin-bottom:20px;
-}
-
-.form-group label{
-    display:block;
-    margin-bottom:8px;
-    color:#334155;
-    font-weight:600;
-}
-
-.form-group input,
-.form-group textarea,
-.form-group select{
-    width:100%;
-    padding:14px 15px;
-    border:1px solid #cbd5e1;
-    border-radius:12px;
-    outline:none;
-    transition:.3s;
-    font-size:15px;
-}
-
-.form-group input:focus,
-.form-group textarea:focus,
-.form-group select:focus{
-    border-color:#2563eb;
-    box-shadow:0 0 0 4px rgba(37,99,235,.12);
-}
-
-.form-group textarea{
-    resize:vertical;
-    min-height:120px;
-}
-
-/* 
-   SUBMIT BUTTON
- */
-.save-btn,
-.btn-submit{
-    width:100%;
-    border:none;
-    background:#2563eb;
-    color:#fff;
-    padding:14px;
-    border-radius:12px;
-    cursor:pointer;
-    font-size:15px;
-    font-weight:600;
-    transition:.3s;
-}
-
-.save-btn:hover,
-.btn-submit:hover{
-    background:#1d4ed8;
-}
 
 /* 
    RESPONSIVE
@@ -1711,15 +1577,12 @@ while($row=mysqli_fetch_assoc($result))
 
  </div>
 <!--  COURSES SECTION  -->
-
 <div class="box" id="coursesSection" style="display:none;">
 
     <!-- HEADER -->
-
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:15px;margin-bottom:25px;">
 
         <div>
-
             <h3>
                 <i class="fas fa-book-open"></i>
                 My Courses
@@ -1729,85 +1592,72 @@ while($row=mysqli_fetch_assoc($result))
                 Access enrolled courses, continue learning,
                 track lessons, assignments, and certificates.
             </p>
-
         </div>
-
 
     </div>
 
-    <!--  SUMMARY  -->
-
+    <!-- SUMMARY -->
     <div class="stats">
 
         <div class="stat-card">
             <i class="fas fa-book"></i>
-            <h2><?= $total_courses ?></h2>
+            <h2><?= (int)($total_courses ?? 0) ?></h2>
             <p>Total Courses</p>
         </div>
 
         <div class="stat-card">
             <i class="fas fa-play-circle"></i>
-            <h2><?= $active_courses ?></h2>
+            <h2><?= (int)($active_courses ?? 0) ?></h2>
             <p>Active Courses</p>
         </div>
 
         <div class="stat-card">
             <i class="fas fa-check-circle"></i>
-            <h2><?= $completed_courses ?></h2>
+            <h2><?= (int)($completed_courses ?? 0) ?></h2>
             <p>Completed Courses</p>
         </div>
 
         <div class="stat-card">
             <i class="fas fa-award"></i>
-            <h2><?= $certificates_earned ?></h2>
+            <h2><?= (int)($certificates_earned ?? 0) ?></h2>
             <p>Certificates Earned</p>
         </div>
 
     </div>
 
-    <!--  ACTIVE COURSES  -->
-
+    <!-- ACTIVE COURSES -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-laptop-code"></i>
-            Active Courses
-        </h3>
+        <h3><i class="fas fa-laptop-code"></i> Active Courses</h3>
 
-        <?php if(mysqli_num_rows($active_courses_list) > 0){ ?>
+        <?php if (!empty($active_courses_list) && $active_courses_list->num_rows > 0) { ?>
 
-            <?php while($course = mysqli_fetch_assoc($active_courses_list)){ ?>
+            <?php while ($course = $active_courses_list->fetch_assoc()) { ?>
 
                 <div class="course">
 
                     <div class="course-info">
 
-                        <h4>
-                            <?= htmlspecialchars($course['title']) ?>
-                        </h4>
+                        <h4><?= htmlspecialchars($course['title'] ?? '') ?></h4>
 
                         <p>
                             Instructor:
-                            <?= htmlspecialchars($course['instructor']) ?>
-
+                            <?= htmlspecialchars($course['instructor'] ?? 'Unknown') ?>
                             •
-
-                            <?= $course['lessons'] ?> Lessons
-
+                            <?= (int)($course['lessons'] ?? 0) ?> Lessons
                             •
-
-                            <?= $course['progress'] ?>% Completed
+                            <?= (int)($course['progress'] ?? 0) ?>% Completed
                         </p>
 
                         <div class="progress">
                             <div class="progress-bar"
-                            style="width:<?= $course['progress'] ?>%;">
+                                 style="width:<?= (int)($course['progress'] ?? 0) ?>%;">
                             </div>
                         </div>
 
                     </div>
 
-                    <a href="course1.php?id=<?= $course['id'] ?>" class="btn">
+                    <a href="course1.php?id=<?= (int)($course['id'] ?? 0) ?>" class="btn">
                         Continue
                     </a>
 
@@ -1826,28 +1676,24 @@ while($row=mysqli_fetch_assoc($result))
 
     </div>
 
-    <!--  COMPLETED COURSES  -->
-
+    <!-- COMPLETED COURSES -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-check-double"></i>
-            Completed Courses
-        </h3>
+        <h3><i class="fas fa-check-double"></i> Completed Courses</h3>
 
-        <?php if(mysqli_num_rows($completed_courses_list) > 0){ ?>
+        <?php if (!empty($completed_courses_list) && $completed_courses_list->num_rows > 0) { ?>
 
-            <?php while($completed = mysqli_fetch_assoc($completed_courses_list)){ ?>
+            <?php while ($completed = $completed_courses_list->fetch_assoc()) { ?>
 
                 <div class="activity">
 
-                    <p>
-                        <?= htmlspecialchars($completed['title']) ?>
-                    </p>
+                    <p><?= htmlspecialchars($completed['title'] ?? '') ?></p>
 
                     <span>
                         Completed on
-                        <?= date("d F Y", strtotime($completed['completed_at'])) ?>
+                        <?= !empty($completed['completed_at'])
+                            ? date("d F Y", strtotime($completed['completed_at']))
+                            : 'N/A' ?>
                     </span>
 
                 </div>
@@ -1865,29 +1711,23 @@ while($row=mysqli_fetch_assoc($result))
 
     </div>
 
-    <!--  ASSIGNMENTS  -->
-
+    <!-- ASSIGNMENTS -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-tasks"></i>
-            Assignments
-        </h3>
+        <h3><i class="fas fa-tasks"></i> Assignments</h3>
 
-        <?php if(mysqli_num_rows($assignments) > 0){ ?>
+        <?php if (!empty($assignments) && $assignments->num_rows > 0) { ?>
 
-            <?php while($assignment = mysqli_fetch_assoc($assignments)){ ?>
+            <?php while ($assignment = $assignments->fetch_assoc()) { ?>
 
                 <div class="activity">
 
-                    <p>
-                        <?= htmlspecialchars($assignment['title']) ?>
-                    </p>
+                    <p><?= htmlspecialchars($assignment['title'] ?? '') ?></p>
 
                     <span>
-                        <?= htmlspecialchars($assignment['status']) ?>
+                        <?= htmlspecialchars($assignment['status'] ?? '') ?>
 
-                        <?php if(!empty($assignment['due_date'])){ ?>
+                        <?php if (!empty($assignment['due_date'])) { ?>
                             • Due <?= date("d F Y", strtotime($assignment['due_date'])) ?>
                         <?php } ?>
                     </span>
@@ -1907,29 +1747,21 @@ while($row=mysqli_fetch_assoc($result))
 
     </div>
 
-    <!--  COURSE MATERIALS  -->
-
+    <!-- COURSE MATERIALS -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-folder-open"></i>
-            Course Materials
-        </h3>
+        <h3><i class="fas fa-folder-open"></i> Course Materials</h3>
 
-        <?php if(mysqli_num_rows($materials) > 0){ ?>
+        <?php if (!empty($materials) && $materials->num_rows > 0) { ?>
 
-            <?php while($material = mysqli_fetch_assoc($materials)){ ?>
+            <?php while ($material = $materials->fetch_assoc()) { ?>
 
                 <div class="activity">
 
-                    <p>
-                        <?= htmlspecialchars($material['title']) ?>
-                    </p>
+                    <p><?= htmlspecialchars($material['title'] ?? '') ?></p>
 
                     <span>
-                        Downloaded
-                        <?= $material['downloads'] ?>
-                        Times
+                        Downloaded <?= (int)($material['downloads'] ?? 0) ?> Times
                     </span>
 
                 </div>
@@ -1947,27 +1779,23 @@ while($row=mysqli_fetch_assoc($result))
 
     </div>
 
-    <!--  LIVE CLASSES  -->
-
+    <!-- LIVE CLASSES -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-video"></i>
-            Upcoming Live Classes
-        </h3>
+        <h3><i class="fas fa-video"></i> Upcoming Live Classes</h3>
 
-        <?php if(mysqli_num_rows($live_classes) > 0){ ?>
+        <?php if (!empty($live_classes) && $live_classes->num_rows > 0) { ?>
 
-            <?php while($live = mysqli_fetch_assoc($live_classes)){ ?>
+            <?php while ($live = $live_classes->fetch_assoc()) { ?>
 
                 <div class="activity">
 
-                    <p>
-                        <?= htmlspecialchars($live['title']) ?>
-                    </p>
+                    <p><?= htmlspecialchars($live['title'] ?? '') ?></p>
 
                     <span>
-                        <?= date("d F Y • h:i A", strtotime($live['schedule_time'])) ?>
+                        <?= !empty($live['schedule_time'])
+                            ? date("d F Y • h:i A", strtotime($live['schedule_time']))
+                            : 'N/A' ?>
                     </span>
 
                 </div>
@@ -1984,8 +1812,8 @@ while($row=mysqli_fetch_assoc($result))
         <?php } ?>
 
     </div>
-
 </div>
+
 
 <!-- quizes -->   
 
@@ -2010,30 +1838,29 @@ while($row=mysqli_fetch_assoc($result))
 <!-- SUMMARY -->
 <div class="stats">
 
-    <div class="stat-card">
-        <i class="fas fa-file-alt"></i>
-        <h2><?= $quizStats ?></h2>
-        <p>Total Quizzes</p>
-    </div>
+<div class="stat-card">
+    <i class="fas fa-file-alt"></i>
+    <h2><?= $total_quizzes ?></h2>
+    <p>Total Quizzes</p>
+</div>
 
-    <div class="stat-card">
-        <i class="fas fa-check-circle"></i>
-        <h2><?= $passed ?></h2>
-        <p>Passed</p>
-    </div>
+<div class="stat-card">
+    <i class="fas fa-check-circle"></i>
+    <h2><?= $passed ?></h2>
+    <p>Passed</p>
+</div>
 
-    <div class="stat-card">
-        <i class="fas fa-times-circle"></i>
-        <h2><?= $failed ?></h2>
-        <p>Failed</p>
-    </div>
+<div class="stat-card">
+    <i class="fas fa-times-circle"></i>
+    <h2><?= $failed ?></h2>
+    <p>Failed</p>
+</div>
 
-    <div class="stat-card">
-        <i class="fas fa-chart-line"></i>
-        <h2><?= round($avgScore) ?>%</h2>
-        <p>Average Score</p>
-    </div>
-
+<div class="stat-card">
+    <i class="fas fa-chart-line"></i>
+    <h2><?= $avgScore ?>%</h2>
+    <p>Average Score</p>
+</div>
 </div>
 
 <?php
@@ -2683,149 +2510,80 @@ function closeQuiz()
 <div class="box" id="browseCoursesSection" style="display:none;">
 
     <!-- HEADER -->
-
-    <div style="
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    flex-wrap:wrap;
-    gap:15px;
-    margin-bottom:25px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:15px;margin-bottom:25px;">
 
         <div>
+            <h3><i class="fas fa-search"></i> Browse Courses</h3>
 
-            <h3>
-                <i class="fas fa-search"></i>
-                Browse Courses
-            </h3>
-
-            <p style="
-            color:#6b7280;
-            font-size:14px;
-            margin-top:5px;">
-                Explore trending courses, discover new skills,
-                and enroll in professional learning programs.
+            <p style="color:#6b7280;font-size:14px;margin-top:5px;">
+                Explore trending courses, discover new skills, and enroll in professional learning programs.
             </p>
-
         </div>
-
 
     </div>
 
-    <!-- SEARCH BAR -->
+    <!-- SEARCH -->
+    <form method="GET" style="display:flex;gap:15px;flex-wrap:wrap;margin-bottom:25px;">
 
-
-    
-    <form method="GET"
-    style="
-    display:flex;
-    gap:15px;
-    flex-wrap:wrap;
-    margin-bottom:25px;">
-
-        <input
-        type="text"
-        name="search"
-        value="<?= htmlspecialchars($search) ?>"
-        placeholder="Search courses..."
-        style="
-        flex:1;
-        padding:14px;
-        border:1px solid #d1d5db;
-        border-radius:10px;
-        outline:none;
-        font-size:15px;
-        ">
+        <input type="text"
+               name="search"
+               value="<?= htmlspecialchars($search) ?>"
+               placeholder="Search courses..."
+               style="flex:1;padding:14px;border:1px solid #d1d5db;border-radius:10px;font-size:15px;">
 
         <button type="submit" class="btn">
-            <i class="fas fa-search"></i>
-            Search
+            <i class="fas fa-search"></i> Search
         </button>
 
     </form>
 
-    <!-- COURSE CATEGORIES -->
-
+    <!-- CATEGORIES -->
     <div class="box">
 
-        <h3>
-            <i class="fas fa-layer-group"></i>
-            Categories
-        </h3>
+        <h3><i class="fas fa-layer-group"></i> Categories</h3>
 
-        <div style="
-        display:flex;
-        gap:10px;
-        flex-wrap:wrap;
-        margin-top:15px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:15px;">
 
             <?php foreach($categories as $category){ ?>
-
-                <button class="btn">
-                    <?= htmlspecialchars($category) ?>
-                </button>
-
+                <button class="btn"><?= htmlspecialchars($category) ?></button>
             <?php } ?>
 
         </div>
-
     </div>
 
     <!-- FEATURED COURSES -->
-
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-star"></i>
-            Featured Courses
-        </h3>
+        <h3><i class="fas fa-star"></i> Featured Courses</h3>
 
-        <?php if(mysqli_num_rows($browseCourses) > 0){ ?>
+        <?php if(count($browseCoursesData) > 0){ ?>
 
-            <?php while($course = mysqli_fetch_assoc($browseCourses)){ ?>
+            <?php foreach($browseCoursesData as $course){ ?>
 
                 <div class="course">
 
                     <div class="course-info">
 
-                        <h4>
-                            <?= htmlspecialchars($course['title']) ?>
-                        </h4>
+                        <h4><?= htmlspecialchars($course['title']) ?></h4>
 
-                        <p>
-                            <?= htmlspecialchars($course['description']) ?>
-                        </p>
+                        <p><?= htmlspecialchars($course['description']) ?></p>
 
-                        <p style="
-                        margin-top:8px;
-                        color:#2563eb;
-                        font-weight:bold;">
-
+                        <p style="margin-top:8px;color:#2563eb;font-weight:bold;">
                             KES <?= number_format($course['price']) ?>
-
                         </p>
 
-                        <p style="
-                        margin-top:8px;
-                        color:#6b7280;
-                        font-size:14px;">
+                        <p style="margin-top:8px;color:#6b7280;font-size:14px;">
 
-                            Instructor:
-                            <?= htmlspecialchars($course['instructor']) ?>
-
+                            Instructor: <?= htmlspecialchars($course['instructor']) ?>
                             • <?= (int)$course['lessons'] ?> Lessons
-
                             • <?= (int)$course['enrolled_students'] ?> Students
 
                         </p>
 
                     </div>
 
-                    <a href="enroll.php?course_id=<?= $course['id'] ?>"
-                    class="btn">
-
+                    <a href="enroll.php?course_id=<?= $course['id'] ?>" class="btn">
                         Enroll Now
-
                     </a>
 
                 </div>
@@ -2835,43 +2593,26 @@ function closeQuiz()
         <?php } else { ?>
 
             <div class="activity">
-
                 <p>No courses found</p>
-
-                <span>
-                    Try searching with another keyword
-                </span>
-
+                <span>Try searching with another keyword</span>
             </div>
 
         <?php } ?>
 
     </div>
 
-    <!-- TRENDING COURSES -->
-
+    <!-- TRENDING -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-fire"></i>
-            Trending Courses
-        </h3>
+        <h3><i class="fas fa-fire"></i> Trending Courses</h3>
 
         <?php if(mysqli_num_rows($trendingCourses) > 0){ ?>
 
             <?php while($trend = mysqli_fetch_assoc($trendingCourses)){ ?>
 
                 <div class="activity">
-
-                    <p>
-                        <?= htmlspecialchars($trend['title']) ?>
-                    </p>
-
-                    <span>
-                        <?= number_format($trend['enrolled_students']) ?>
-                        Students Enrolled
-                    </span>
-
+                    <p><?= htmlspecialchars($trend['title']) ?></p>
+                    <span><?= number_format($trend['enrolled_students']) ?> Students Enrolled</span>
                 </div>
 
             <?php } ?>
@@ -2879,13 +2620,8 @@ function closeQuiz()
         <?php } else { ?>
 
             <div class="activity">
-
                 <p>No trending courses available</p>
-
-                <span>
-                    Courses will appear here automatically
-                </span>
-
+                <span>Courses will appear automatically</span>
             </div>
 
         <?php } ?>
@@ -2893,74 +2629,57 @@ function closeQuiz()
     </div>
 
     <!-- TOP INSTRUCTORS -->
-
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-chalkboard-teacher"></i>
-            Top Instructors
-        </h3>
+    <h3><i class="fas fa-chalkboard-teacher"></i> Top Instructors</h3>
 
-        <?php if(mysqli_num_rows($topInstructors) > 0){ ?>
+    <?php if ($topInstructors && mysqli_num_rows($topInstructors) > 0) { ?>
 
-            <?php while($instructor = mysqli_fetch_assoc($topInstructors)){ ?>
-
-                <div class="activity">
-
-                    <p>
-                        <?= htmlspecialchars($instructor['name']) ?>
-                    </p>
-
-                    <span>
-
-                        <?= htmlspecialchars($instructor['title']) ?>
-
-                        • Rating:
-                        <?= (int)$instructor['rating'] ?>/5
-
-                    </span>
-
-                </div>
-
-            <?php } ?>
-
-        <?php } else { ?>
+        <?php while ($instructor = mysqli_fetch_assoc($topInstructors)) { ?>
 
             <div class="activity">
 
-                <p>No instructors available</p>
+                <p>
+                    <?= htmlspecialchars($instructor['full_name']) ?>
+                </p>
 
                 <span>
-                    Instructor data will appear here
+
+                    <?= htmlspecialchars($instructor['specialization'] ?? 'No specialization') ?>
+
+                    • <?= htmlspecialchars($instructor['qualification'] ?? 'No qualification') ?>
+
+                    • <?= (int)$instructor['experience_years'] ?> yrs experience
+
+                    • <?= (int)$instructor['courses_count'] ?> courses
+
                 </span>
 
             </div>
 
         <?php } ?>
 
-    </div>
+    <?php } else { ?>
 
-    <!-- COURSE BENEFITS -->
+        <div class="activity">
+            <p>No instructors available</p>
+            <span>Instructor data will appear here</span>
+        </div>
 
+    <?php } ?>
+
+</div>
+
+    <!-- BENEFITS -->
     <div class="box" style="margin-top:25px;">
 
-        <h3>
-            <i class="fas fa-gift"></i>
-            Why Learn With Us?
-        </h3>
+        <h3><i class="fas fa-gift"></i> Why Learn With Us?</h3>
 
         <?php foreach($courseBenefits as $benefit){ ?>
 
             <div class="activity">
-
-                <p>
-                    <?= htmlspecialchars($benefit['title']) ?>
-                </p>
-
-                <span>
-                    <?= htmlspecialchars($benefit['description']) ?>
-                </span>
-
+                <p><?= htmlspecialchars($benefit['title']) ?></p>
+                <span><?= htmlspecialchars($benefit['description']) ?></span>
             </div>
 
         <?php } ?>
@@ -3107,16 +2826,14 @@ while($row = mysqli_fetch_assoc($result)) {
 
 
 <!-- TICKET SECTION --> 
-<div class="box" id="ticketSection" style="display:none">
-<?php if($role != 'admin') { ?>
+<div class="box" id="ticketSection" style="display:none;">
+
+<?php if(isset($role) && $role != 'admin'): ?>
 
 <div class="ticket-container">
 
-    <!-- =========================
-         RAISE TICKET SECTION
-    ========================== -->
+    <!-- Raise Ticket -->
     <div class="ticket-box">
-
         <h3>🎟️ Raise Ticket</h3>
 
         <form method="POST" action="create_ticket.php">
@@ -3131,10 +2848,10 @@ while($row = mysqli_fetch_assoc($result)) {
             </select>
 
             <label>Subject</label>
-            <input type="text" name="subject" placeholder="Enter subject..." required>
+            <input type="text" name="subject" required>
 
             <label>Message</label>
-            <textarea name="message" placeholder="Describe your issue..." required></textarea>
+            <textarea name="message" required></textarea>
 
             <button type="submit">Submit Ticket</button>
 
@@ -3143,52 +2860,90 @@ while($row = mysqli_fetch_assoc($result)) {
 
     <hr>
 
-    <!-- =========================
-         TICKET HISTORY
-    ========================== -->
+    <!-- Ticket History -->
     <div class="ticket-box">
 
         <h3>📄 My Tickets</h3>
 
-        <table>
-            <tr>
-                <th>Type</th>
-                <th>Subject</th>
-                <th>Status</th>
-                <th>Date</th>
-            </tr>
+        <table width="100%" border="1" cellspacing="0" cellpadding="10">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Subject</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                </tr>
+            </thead>
+
+            <tbody>
 
             <?php
-            $result = mysqli_query($conn, "
-                SELECT * FROM tickets
-                WHERE user_id='$user_id'
+
+            $user_id = intval($_SESSION['user_id']);
+
+            $stmt = $conn->prepare("
+                SELECT *
+                FROM tickets
+                WHERE user_id = ?
                 ORDER BY created_at DESC
             ");
 
-            while($row = mysqli_fetch_assoc($result)) {
+            $stmt->bind_param("i", $user_id);
+            $stmt->execute();
+
+            $tickets = $stmt->get_result();
+
+            if($tickets && $tickets->num_rows > 0):
+
+                while($ticket = $tickets->fetch_assoc()):
+
+                    $status = '';
+
+                    switch($ticket['status']){
+
+                        case 'open':
+                            $status = "<span style='color:orange;font-weight:bold;'>🟡 Open</span>";
+                            break;
+
+                        case 'in_progress':
+                            $status = "<span style='color:blue;font-weight:bold;'>🔵 In Progress</span>";
+                            break;
+
+                        case 'resolved':
+                            $status = "<span style='color:green;font-weight:bold;'>🟢 Resolved</span>";
+                            break;
+
+                        case 'closed':
+                            $status = "<span style='color:gray;font-weight:bold;'>⚫ Closed</span>";
+                            break;
+
+                        default:
+                            $status = htmlspecialchars($ticket['status']);
+                    }
             ?>
 
-            <tr>
-                <td><?= $row['type'] ?></td>
-                <td><?= $row['subject'] ?></td>
+                <tr>
+                    <td><?= htmlspecialchars($ticket['type']) ?></td>
+                    <td><?= htmlspecialchars($ticket['subject']) ?></td>
+                    <td><?= $status ?></td>
+                    <td><?= htmlspecialchars($ticket['created_at']) ?></td>
+                </tr>
 
-                <td>
-                    <?php
-                        if($row['status']=='open')
-                            echo "<span class='status-open'>🟡 Open</span>";
-                        elseif($row['status']=='in_progress')
-                            echo "<span class='status-progress'>🔵 In Progress</span>";
-                        elseif($row['status']=='resolved')
-                            echo "<span class='status-resolved'>🟢 Resolved</span>";
-                        else
-                            echo "<span class='status-closed'>⚫ Closed</span>";
-                    ?>
-                </td>
+            <?php
+                endwhile;
 
-                <td><?= $row['created_at'] ?></td>
-            </tr>
+            else:
+            ?>
 
-            <?php } ?>
+                <tr>
+                    <td colspan="4" style="text-align:center;">
+                        No tickets found.
+                    </td>
+                </tr>
+
+            <?php endif; ?>
+
+            </tbody>
 
         </table>
 
@@ -3196,8 +2951,10 @@ while($row = mysqli_fetch_assoc($result)) {
 
 </div>
 
-<?php } ?>
+<?php endif; ?>
+
 </div>
+
 
 
 <!---  PAYMENT SECTION  -->
@@ -3408,17 +3165,56 @@ while($row = mysqli_fetch_assoc($result)) {
 
         <div class="profile-image">
 
-            <?php if(!empty($profile['profile_image'])) { ?>
+<?php
+$image = $profile['profile_image'] ?? '';
+$src = "https://via.placeholder.com/120";
 
-                <img src="uploads/<?= htmlspecialchars($profile['profile_image']) ?>" alt="Profile Image">
+/* =========================
+   SECURITY CHECKS
+========================= */
+if (!empty($image)) {
 
-            <?php } else { ?>
+    // 1. Prevent script injection
+    $image = trim($image);
+    $image = strip_tags($image);
 
-                <img src="https://via.placeholder.com/120" alt="Profile Image">
+    // 2. If it's a valid URL (cloud image)
+    if (filter_var($image, FILTER_VALIDATE_URL)) {
 
-            <?php } ?>
+        // Only allow safe protocols
+        if (preg_match('/^https?:\/\//', $image)) {
+            $src = $image;
+        }
 
-        </div>
+    } 
+    // 3. Local file validation
+    else {
+
+        // Prevent directory traversal
+        $image = basename($image);
+
+        // Allowed extensions only
+        $allowed_ext = ['jpg', 'jpeg', 'png', 'webp'];
+
+        $ext = strtolower(pathinfo($image, PATHINFO_EXTENSION));
+
+        if (in_array($ext, $allowed_ext)) {
+
+            $file_path = "uploads/" . $image;
+
+            // Ensure file exists before showing
+            if (file_exists($file_path)) {
+                $src = $file_path;
+            }
+        }
+    }
+}
+?>
+
+<img src="<?= htmlspecialchars($src, ENT_QUOTES, 'UTF-8') ?>" alt="Profile Image">
+
+</div>
+
 
         <!-- PROFILE INFO -->
 
@@ -3675,11 +3471,14 @@ while($row = mysqli_fetch_assoc($result)) {
 
         <form method="POST" enctype="multipart/form-data">
 
+            <!-- CSRF TOKEN (IMPORTANT FIX) -->
+            <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?? '' ?>">
+
             <div class="form-group">
                 <label>Full Name</label>
                 <input type="text"
                        name="full_name"
-                       value="<?= htmlspecialchars($profile['full_name']) ?>"
+                       value="<?= htmlspecialchars($profile['full_name'] ?? '') ?>"
                        required>
             </div>
 
@@ -3687,7 +3486,7 @@ while($row = mysqli_fetch_assoc($result)) {
                 <label>Email</label>
                 <input type="email"
                        name="email"
-                       value="<?= htmlspecialchars($profile['email']) ?>"
+                       value="<?= htmlspecialchars($profile['email'] ?? '') ?>"
                        required>
             </div>
 
@@ -3695,19 +3494,19 @@ while($row = mysqli_fetch_assoc($result)) {
                 <label>Phone Number</label>
                 <input type="text"
                        name="phone"
-                       value="<?= htmlspecialchars($profile['phone']) ?>">
+                       value="<?= htmlspecialchars($profile['phone'] ?? '') ?>">
             </div>
 
             <div class="form-group">
                 <label>Location</label>
                 <input type="text"
                        name="location"
-                       value="<?= htmlspecialchars($profile['location']) ?>">
+                       value="<?= htmlspecialchars($profile['location'] ?? '') ?>">
             </div>
 
             <div class="form-group">
                 <label>Bio</label>
-                <textarea name="bio"><?= htmlspecialchars($profile['bio']) ?></textarea>
+                <textarea name="bio"><?= htmlspecialchars($profile['bio'] ?? '') ?></textarea>
             </div>
 
             <div class="form-group">
@@ -4016,7 +3815,8 @@ window.onclick = function(event){
     });
 
 }
-</script>
 
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

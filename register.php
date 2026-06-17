@@ -152,9 +152,9 @@ body{
     display:flex;
     justify-content:center;
     align-items:center;
-    background:linear-gradient(-45deg,#00c9ff,#92fe9d,#f093fb,#f5576c);
+    background: linear-gradient(-45deg, #0f0c29, #302b63, #24243e, #00d4ff);
     background-size:400% 400%;
-    animation:bg 10s infinite;
+    animation:bg 5s infinite;
 }
 
 @keyframes bg{

@@ -2,25 +2,49 @@
 session_start();
 include "db.php";
 
-/* FETCH TEACHERS */
+/* ==========================
+   SECURITY: LOGIN CHECK
+========================== */
+if (!isset($_SESSION['user_id'])) {
+    die("Unauthorized access. Please login first.");
+}
+
+/* ==========================
+   CSRF TOKEN
+========================== */
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+/* ==========================
+   FETCH TEACHERS
+========================== */
 $teachers = mysqli_query($conn,"
-    SELECT t.id, u.full_name
-    FROM teachers t
-    JOIN users u ON t.user_id = u.id
-    ORDER BY u.full_name ASC
+    SELECT id, full_name
+    FROM users
+    WHERE role='teacher'
+    ORDER BY full_name ASC
 ");
 
-/* FETCH COURSES */
+/* ==========================
+   FETCH COURSES
+========================== */
 $courses = mysqli_query($conn,"
-    SELECT c.*, u.full_name
+    SELECT c.*, u.full_name AS teacher_name
     FROM courses c
-    LEFT JOIN teachers t ON c.teacher_id = t.id
-    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN users u ON c.teacher_id = u.id
     ORDER BY c.id DESC
 ");
 
-/* CREATE COURSE */
+/* ==========================
+   CREATE COURSE (SECURE)
+========================== */
 if(isset($_POST['create_course'])){
+
+    /* CSRF CHECK */
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die("Invalid CSRF token");
+    }
 
     $title = trim($_POST['title']);
     $description = trim($_POST['description']);
@@ -31,10 +55,26 @@ if(isset($_POST['create_course'])){
     $status = trim($_POST['status']);
     $teacher_id = intval($_POST['teacher_id']);
 
-    /* IMAGE UPLOAD */
-    $thumbnail = "";
+    /* fallback category */
+    if (!empty($custom_category)) {
+        $category = $custom_category;
+    }
+
+    /* ================= FILE UPLOAD SECURITY ================= */
+    $thumbnail = "uploads/default.jpg";
 
     if(!empty($_FILES['thumbnail']['name'])){
+
+        $allowed = ['jpg','jpeg','png','webp'];
+        $ext = strtolower(pathinfo($_FILES['thumbnail']['name'], PATHINFO_EXTENSION));
+
+        if (!in_array($ext, $allowed)) {
+            die("Invalid image format");
+        }
+
+        if ($_FILES['thumbnail']['size'] > 2 * 1024 * 1024) {
+            die("Image too large (max 2MB)");
+        }
 
         $target_dir = "uploads/";
 
@@ -42,7 +82,7 @@ if(isset($_POST['create_course'])){
             mkdir($target_dir, 0777, true);
         }
 
-        $file_name = time() . "_" . basename($_FILES['thumbnail']['name']);
+        $file_name = "course_" . uniqid() . "." . $ext;
         $thumbnail = $target_dir . $file_name;
 
         move_uploaded_file(
@@ -51,9 +91,9 @@ if(isset($_POST['create_course'])){
         );
     }
 
+    /* ================= INSERT (SAFE) ================= */
     $stmt = $conn->prepare("
-        INSERT INTO courses
-        (
+        INSERT INTO courses (
             title,
             description,
             category,
@@ -64,8 +104,7 @@ if(isset($_POST['create_course'])){
             status,
             teacher_id
         )
-        VALUES
-        (?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?)
     ");
 
     $stmt->bind_param(
@@ -83,38 +122,41 @@ if(isset($_POST['create_course'])){
 
     $stmt->execute();
 
-    header("Location: ".$_SERVER['PHP_SELF']);
+    header("Location: " . $_SERVER['PHP_SELF']);
     exit;
 }
 
-/* DELETE OR ARCHIVE */
+/* ==========================
+   DELETE / ARCHIVE (SECURE)
+========================== */
 if(isset($_POST['delete_course'])){
+
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        die("Invalid CSRF token");
+    }
 
     $course_id = intval($_POST['course_id']);
     $action = $_POST['action'];
 
-    if($action == "delete"){
+    if($action === "delete"){
 
-        $stmt = $conn->prepare(
-            "DELETE FROM courses WHERE id=?"
-        );
-
-        $stmt->bind_param("i",$course_id);
+        $stmt = $conn->prepare("DELETE FROM courses WHERE id=?");
+        $stmt->bind_param("i", $course_id);
         $stmt->execute();
 
-    }else{
+    } else {
 
-        $stmt = $conn->prepare(
-            "UPDATE courses
-             SET status='archived'
-             WHERE id=?"
-        );
+        $stmt = $conn->prepare("
+            UPDATE courses
+            SET status='Inactive'
+            WHERE id=?
+        ");
 
-        $stmt->bind_param("i",$course_id);
+        $stmt->bind_param("i", $course_id);
         $stmt->execute();
     }
 
-    header("Location: ".$_SERVER['PHP_SELF']);
+    header("Location: " . $_SERVER['PHP_SELF']);
     exit;
 }
 ?>
@@ -127,16 +169,13 @@ if(isset($_POST['delete_course'])){
 
 <style>
 body{
-    font-family:Arial;
+    font-family:Arial,sans-serif;
     background:#f4f6f9;
     margin:0;
     padding:20px;
 }
 
-.container{
-    max-width:1200px;
-    margin:auto;
-}
+.container{max-width:1200px;margin:auto}
 
 .card{
     background:#fff;
@@ -146,15 +185,12 @@ body{
     box-shadow:0 2px 8px rgba(0,0,0,.1);
 }
 
-input,
-textarea,
-select{
+input,textarea,select{
     width:100%;
     padding:10px;
     margin-bottom:10px;
     border:1px solid #ccc;
     border-radius:5px;
-    box-sizing:border-box;
 }
 
 button{
@@ -164,26 +200,17 @@ button{
     cursor:pointer;
 }
 
-.btn-primary{
-    background:#007bff;
-    color:#fff;
-}
-
-.btn-danger{
-    background:#dc3545;
-    color:#fff;
-}
+.btn-primary{background:#007bff;color:#fff}
+.btn-danger{background:#dc3545;color:#fff}
 
 table{
     width:100%;
     border-collapse:collapse;
 }
 
-table th,
-table td{
+th,td{
     border:1px solid #ddd;
     padding:10px;
-    text-align:left;
 }
 
 img{
@@ -193,21 +220,13 @@ img{
 
 .status{
     padding:5px 10px;
-    border-radius:5px;
     color:#fff;
+    border-radius:5px;
+    font-size:12px;
 }
 
-.draft{
-    background:gray;
-}
-
-.published{
-    background:green;
-}
-
-.archived{
-    background:orange;
-}
+.active{background:green}
+.inactive{background:red}
 </style>
 
 </head>
@@ -215,206 +234,142 @@ img{
 
 <div class="container">
 
+<!-- CREATE -->
 <div class="card">
 <h2>Create Course</h2>
 
 <form method="POST" enctype="multipart/form-data">
 
-    <input
-        type="text"
-        name="title"
-        placeholder="Course Title"
-        required
-    >
+<input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token']; ?>">
 
-    <textarea
-        name="description"
-        placeholder="Course Description"
-        required
-    ></textarea>
+<input type="text" name="title" placeholder="Course Title" required>
 
-    <label>Category</label>
+<textarea name="description" placeholder="Course Description" required></textarea>
 
-    <select name="category" required>
-        <option value="">Select Category</option>
-        <option value="web_dev">Web Development</option>
-        <option value="mobile_dev">Mobile Development</option>
-        <option value="data_science">Data Science</option>
-        <option value="ui_ux">UI/UX Design</option>
-        <option value="cyber_security">Cyber Security</option>
-        <option value="ai_ml">AI / ML</option>
-    </select>
+<select name="category" required>
+    <option value="">Select Category</option>
+    <option value="web_dev">Web Development</option>
+    <option value="mobile_dev">Mobile Development</option>
+    <option value="data_science">Data Science</option>
+    <option value="ui_ux">UI/UX Design</option>
+    <option value="cyber_security">Cyber Security</option>
+    <option value="ai_ml">AI / Machine Learning</option>
+</select>
 
-    <input
-        type="text"
-        name="custom_category"
-        placeholder="Custom Category"
-    >
+<input type="text" name="custom_category" placeholder="Custom Category (Optional)">
 
-    <label>Assign Teacher</label>
+<select name="teacher_id" required>
+    <option value="">Select Teacher</option>
 
-    <select name="teacher_id" required>
-        <option value="">Select Teacher</option>
+    <?php while($teacher = mysqli_fetch_assoc($teachers)) { ?>
+        <option value="<?= $teacher['id']; ?>">
+            <?= htmlspecialchars($teacher['full_name']); ?>
+        </option>
+    <?php } ?>
+</select>
 
-        <?php
-        mysqli_data_seek($teachers,0);
+<input type="file" name="thumbnail" accept="image/*">
 
-        while($teacher = mysqli_fetch_assoc($teachers)){
-        ?>
-            <option value="<?= $teacher['id']; ?>">
-                <?= htmlspecialchars($teacher['full_name']); ?>
-            </option>
-        <?php } ?>
-    </select>
+<select name="type">
+    <option value="free">Free</option>
+    <option value="paid">Paid</option>
+</select>
 
-    <label>Thumbnail</label>
+<input type="number" step="0.01" name="price" value="0">
 
-    <input
-        type="file"
-        name="thumbnail"
-        required
-    >
+<select name="status">
+    <option value="Active">Active</option>
+    <option value="Inactive">Inactive</option>
+</select>
 
-    <select name="type">
-        <option value="free">Free</option>
-        <option value="paid">Paid</option>
-    </select>
-
-    <input
-        type="number"
-        step="0.01"
-        name="price"
-        placeholder="Price"
-        value="0"
-    >
-
-    <select name="status">
-        <option value="draft">Draft</option>
-        <option value="published">Published</option>
-    </select>
-
-    <button
-        class="btn-primary"
-        name="create_course"
-    >
-        Create Course
-    </button>
+<button type="submit" name="create_course" class="btn-primary">
+Create Course
+</button>
 
 </form>
 </div>
 
+<!-- DELETE -->
 <div class="card">
-
-<h2>Delete / Archive Course</h2>
+<h2>Delete Course</h2>
 
 <form method="POST">
 
-    <select name="course_id" required>
+<input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token']; ?>">
 
-        <option value="">Select Course</option>
+<select name="course_id" required>
+    <option value="">Select Course</option>
 
-        <?php
-        $course_list = mysqli_query(
-            $conn,
-            "SELECT id,title FROM courses ORDER BY id DESC"
-        );
+    <?php
+    $course_list = mysqli_query($conn,"SELECT id,title FROM courses ORDER BY id DESC");
+    while($c = mysqli_fetch_assoc($course_list)){
+    ?>
+        <option value="<?= $c['id']; ?>">
+            <?= htmlspecialchars($c['title']); ?>
+        </option>
+    <?php } ?>
+</select>
 
-        while($c = mysqli_fetch_assoc($course_list)){
-        ?>
-            <option value="<?= $c['id']; ?>">
-                <?= htmlspecialchars($c['title']); ?>
-            </option>
-        <?php } ?>
+<select name="action">
+    <option value="delete">Delete</option>
+    <option value="archive">Archive</option>
+</select>
 
-    </select>
-
-    <select name="action">
-        <option value="archive">Archive</option>
-        <option value="delete">Delete</option>
-    </select>
-
-    <button
-        class="btn-danger"
-        name="delete_course"
-    >
-        Apply
-    </button>
+<button type="submit" name="delete_course" class="btn-danger">
+Apply
+</button>
 
 </form>
-
 </div>
 
+<!-- LIST -->
 <div class="card">
-
 <h2>Course List</h2>
 
 <table>
-
 <tr>
-    <th>ID</th>
-    <th>Title</th>
-    <th>Teacher</th>
-    <th>Category</th>
-    <th>Thumbnail</th>
-    <th>Price</th>
-    <th>Status</th>
+<th>ID</th>
+<th>Title</th>
+<th>Teacher</th>
+<th>Category</th>
+<th>Thumbnail</th>
+<th>Price</th>
+<th>Status</th>
 </tr>
 
-<?php
-
-$courses2 = mysqli_query($conn,"
-    SELECT
-        c.*,
-        u.full_name
-    FROM courses c
-    LEFT JOIN teachers t
-        ON c.teacher_id = t.id
-    LEFT JOIN users u
-        ON t.user_id = u.id
-    ORDER BY c.id DESC
-");
-
-while($row = mysqli_fetch_assoc($courses2)){
-?>
+<?php while($row = mysqli_fetch_assoc($courses)) { ?>
 
 <tr>
+<td><?= $row['id']; ?></td>
 
-    <td><?= $row['id']; ?></td>
+<td><?= htmlspecialchars($row['title']); ?></td>
 
-    <td>
-        <?= htmlspecialchars($row['title']); ?>
-    </td>
+<td>
+<?= !empty($row['teacher_name'])
+? htmlspecialchars($row['teacher_name'])
+: "Not Assigned"; ?>
+</td>
 
-    <td>
-        <?= $row['full_name'] ?: 'Not Assigned'; ?>
-    </td>
+<td><?= htmlspecialchars($row['category']); ?></td>
 
-    <td>
-        <?= htmlspecialchars($row['category']); ?>
-    </td>
+<td>
+<?php if(!empty($row['thumbnail'])) { ?>
+    <img src="<?= htmlspecialchars($row['thumbnail']); ?>">
+<?php } else { echo "No Image"; } ?>
+</td>
 
-    <td>
-        <?php if(!empty($row['thumbnail'])){ ?>
-            <img src="<?= $row['thumbnail']; ?>">
-        <?php } ?>
-    </td>
+<td>$<?= number_format($row['price'],2); ?></td>
 
-    <td>
-        $<?= number_format($row['price'],2); ?>
-    </td>
-
-    <td>
-        <span class="status <?= $row['status']; ?>">
-            <?= ucfirst($row['status']); ?>
-        </span>
-    </td>
-
+<td>
+<span class="status <?= strtolower($row['status']); ?>">
+<?= htmlspecialchars($row['status']); ?>
+</span>
+</td>
 </tr>
 
 <?php } ?>
 
 </table>
-
 </div>
 
 </div>

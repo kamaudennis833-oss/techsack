@@ -10,138 +10,174 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-$user_id = $_SESSION['user_id'];
+$user_id = (int)$_SESSION['user_id'];
 
 /* =========================
-   GET TEACHER INFO (ONCE)
+   GET TEACHER INFO
 ========================= */
 $stmt = $conn->prepare("
-    SELECT t.id, t.*, u.full_name, u.email
+    SELECT t.*, u.full_name, u.email
     FROM teachers t
     LEFT JOIN users u ON u.id = t.user_id
     WHERE t.user_id = ?
     LIMIT 1
 ");
+
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
 
-$result = $stmt->get_result();
-$teacherInfo = $result->fetch_assoc();
+$teacherInfo = $stmt->get_result()->fetch_assoc();
 
 if (!$teacherInfo) {
     die("Access denied: Not a teacher account");
 }
 
-$teacher_id = $teacherInfo['id'];
+/*
+IMPORTANT:
+course_teachers.teacher_id stores users.id
+*/
+$teacher_id = $user_id;
 
 /* =========================
-   COURSES (THIS TEACHER ONLY)
+   COURSES (ONLY ONCE - FIXED)
 ========================= */
-$stmtCourses = $conn->prepare("
-    SELECT 
+$stmtallCourses = $conn->prepare("
+    SELECT
         c.id,
         c.title,
         c.description,
-        c.price,
+        COALESCE(c.price,0) AS price,
         c.created_at,
-        COUNT(DISTINCT e.user_id) AS students,
-        COUNT(DISTINCT cc.id) AS contents
+
+        (
+            SELECT COUNT(DISTINCT e.user_id)
+            FROM enrollments e
+            WHERE e.course_id = c.id
+        ) AS students,
+
+        (
+            SELECT COUNT(*)
+            FROM course_contents cc
+            WHERE cc.course_id = c.id
+        ) AS contents
+
     FROM courses c
-    JOIN course_teachers ct ON ct.course_id = c.id
-    LEFT JOIN enrollments e ON e.course_id = c.id
-    LEFT JOIN course_contents cc ON cc.course_id = c.id
+    INNER JOIN course_teachers ct
+        ON ct.course_id = c.id
     WHERE ct.teacher_id = ?
-    GROUP BY c.id, c.title, c.description, c.price, c.created_at
+      AND ct.status = 'active'
     ORDER BY c.created_at DESC
 ");
 
-$stmtCourses->bind_param("i", $teacher_id);
-$stmtCourses->execute();
-$courses = $stmtCourses->get_result();
+$stmtallCourses->bind_param("i", $teacher_id);
+$stmtallCourses->execute();
+$allcourses = $stmtallCourses->get_result();
 
 /* =========================
-   STATS COUNTS
+   TOTAL COURSES
 ========================= */
-
-// Courses count
 $stmt = $conn->prepare("
-    SELECT COUNT(*) AS total
+    SELECT COUNT(DISTINCT course_id) AS total
     FROM course_teachers
     WHERE teacher_id = ?
+      AND status = 'active'
 ");
 $stmt->bind_param("i", $teacher_id);
 $stmt->execute();
-$courses_count = $stmt->get_result()->fetch_assoc()['total'];
+$courses_count = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-// Students count
+/* =========================
+   TOTAL STUDENTS
+========================= */
 $stmt = $conn->prepare("
     SELECT COUNT(DISTINCT e.user_id) AS total
     FROM enrollments e
-    JOIN course_teachers ct ON ct.course_id = e.course_id
+    INNER JOIN course_teachers ct
+        ON ct.course_id = e.course_id
     WHERE ct.teacher_id = ?
+      AND ct.status = 'active'
 ");
 $stmt->bind_param("i", $teacher_id);
 $stmt->execute();
-$students_count = $stmt->get_result()->fetch_assoc()['total'];
+$students_count = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-// Notes count
+/* =========================
+   NOTES COUNT
+========================= */
 $stmt = $conn->prepare("
     SELECT COUNT(*) AS total
     FROM course_contents cc
-    JOIN course_teachers ct ON ct.course_id = cc.course_id
-    WHERE ct.teacher_id = ? AND cc.content_type = 'PDF'
+    INNER JOIN course_teachers ct
+        ON ct.course_id = cc.course_id
+    WHERE ct.teacher_id = ?
+      AND ct.status = 'active'
+      AND cc.content_type = 'PDF'
 ");
 $stmt->bind_param("i", $teacher_id);
 $stmt->execute();
-$notes_count = $stmt->get_result()->fetch_assoc()['total'];
+$notes_count = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-// Videos count
+/* =========================
+   VIDEOS COUNT
+========================= */
 $stmt = $conn->prepare("
     SELECT COUNT(*) AS total
     FROM course_contents cc
-    JOIN course_teachers ct ON ct.course_id = cc.course_id
-    WHERE ct.teacher_id = ? AND cc.content_type = 'Video'
+    INNER JOIN course_teachers ct
+        ON ct.course_id = cc.course_id
+    WHERE ct.teacher_id = ?
+      AND ct.status = 'active'
+      AND cc.content_type = 'Video'
 ");
 $stmt->bind_param("i", $teacher_id);
 $stmt->execute();
-$videos_count = $stmt->get_result()->fetch_assoc()['total'];
+$videos_count = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
-// Quiz count
+/* =========================
+   QUIZZES COUNT
+========================= */
 $stmt = $conn->prepare("
     SELECT COUNT(*) AS total
     FROM quizzes q
-    JOIN course_teachers ct ON ct.course_id = q.course_id
+    INNER JOIN course_teachers ct
+        ON ct.course_id = q.course_id
     WHERE ct.teacher_id = ?
+      AND ct.status = 'active'
 ");
 $stmt->bind_param("i", $teacher_id);
 $stmt->execute();
-$quiz_count = $stmt->get_result()->fetch_assoc()['total'];
+$quiz_count = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 
 /* =========================
-   ACTIVITIES
+   ACTIVITIES (FIXED)
 ========================= */
-$activities = $conn->query("
+$stmt = $conn->prepare("
     SELECT message, created_at
     FROM activities
     ORDER BY created_at DESC
     LIMIT 5
 ");
+$stmt->execute();
+$activities = $stmt->get_result();
 
 /* =========================
    UPDATE COURSE
 ========================= */
 if (isset($_POST['update_course'])) {
 
-    $course_id = intval($_POST['id']);
+    $course_id = (int)$_POST['id'];
     $title = trim($_POST['title']);
     $description = trim($_POST['description']);
-    $price = floatval($_POST['price']);
+    $price = (float)$_POST['price'];
 
     $stmt = $conn->prepare("
         UPDATE courses c
-        JOIN course_teachers ct ON ct.course_id = c.id
+        INNER JOIN course_teachers ct
+            ON ct.course_id = c.id
         SET c.title = ?, c.description = ?, c.price = ?
-        WHERE c.id = ? AND ct.teacher_id = ?
+        WHERE c.id = ?
+          AND ct.teacher_id = ?
+          AND ct.status = 'active'
     ");
 
     $stmt->bind_param(
@@ -155,95 +191,44 @@ if (isset($_POST['update_course'])) {
 
     $stmt->execute();
 
-    if ($stmt->affected_rows > 0) {
-        echo "<script>alert('Course Updated Successfully');</script>";
-    } else {
-        echo "<script>alert('No changes made or unauthorized');</script>";
-    }
+    echo "<script>alert('Course Updated');</script>";
 }
 
 /* =========================
-   DELETE COURSE (SECURE POST)
+   DELETE COURSE (FIXED - GET)
 ========================= */
-if (isset($_POST['delete_course'])) {
+if (isset($_GET['delete_course'])) {
 
-    $course_id = intval($_POST['course_id']);
+    $course_id = (int)$_GET['delete_course'];
 
     $stmt = $conn->prepare("
-        DELETE c
-        FROM courses c
-        JOIN course_teachers ct ON ct.course_id = c.id
-        WHERE c.id = ? AND ct.teacher_id = ?
+        DELETE FROM course_teachers
+        WHERE course_id = ?
+          AND teacher_id = ?
     ");
 
     $stmt->bind_param("ii", $course_id, $teacher_id);
     $stmt->execute();
 
-    header("Location: teacher_courses.php");
-    exit;
+    echo "<script>alert('Course Removed');</script>";
 }
 
 /* =========================
-   FETCH COURSES AGAIN
+   UPLOAD DIRECTORIES (FIXED)
 ========================= */
-$stmtCourses = $conn->prepare("
-    SELECT 
-        c.id,
-        c.title,
-        c.description,
-        c.price,
-        c.created_at,
-        COUNT(DISTINCT e.user_id) AS students,
-        COUNT(DISTINCT cc.id) AS contents
-    FROM courses c
-    JOIN course_teachers ct ON ct.course_id = c.id
-    LEFT JOIN enrollments e ON e.course_id = c.id
-    LEFT JOIN course_contents cc ON cc.course_id = c.id
-    WHERE ct.teacher_id = ?
-    GROUP BY c.id, c.title, c.description, c.price, c.created_at
-    ORDER BY c.created_at DESC
-");
+$video_dir = "uploads/videos/";
+$note_dir  = "uploads/notes/";
 
-$stmtCourses->bind_param("i", $teacher_id);
-$stmtCourses->execute();
-$courses = $stmtCourses->get_result();
+if (!file_exists($video_dir)) mkdir($video_dir, 0777, true);
+if (!file_exists($note_dir)) mkdir($note_dir, 0777, true);
 
-/* VEDIO  */ 
-$user_id = $_SESSION['user_id'];
 
-/* =========================
-   GET TEACHER
-========================= */
-$stmt = $conn->prepare("
-    SELECT id
-    FROM teachers
-    WHERE user_id = ?
-    LIMIT 1
-");
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$teacher = $stmt->get_result()->fetch_assoc();
-
-if (!$teacher) {
-    die("Access denied");
-}
-
-$teacher_id = $teacher['id'];
-
-/* =========================
-   UPLOAD FOLDER
-========================= */
-$upload_dir = "uploads/videos/";
-if (!file_exists($upload_dir)) {
-    mkdir($upload_dir, 0777, true);
-}
-
-/* =========================
+/* =====================================================
    UPLOAD VIDEO
-========================= */
+===================================================== */
 if (isset($_POST['upload_video'])) {
 
-    $course_id = intval($_POST['course_id']);
+    $course_id = (int)$_POST['course_id'];
     $title = trim($_POST['title']);
     $access = $_POST['access_type'];
 
@@ -252,10 +237,9 @@ if (isset($_POST['upload_video'])) {
     if (!empty($_FILES['video']['name'])) {
 
         $file_name = time() . "_" . basename($_FILES['video']['name']);
-        $target = $upload_dir . $file_name;
+        $target = $video_dir . $file_name;
 
         move_uploaded_file($_FILES['video']['tmp_name'], $target);
-
         $file_path = $target;
     }
 
@@ -271,74 +255,93 @@ if (isset($_POST['upload_video'])) {
         $title,
         $file_path,
         $access,
-        $user_id
+        $teacher_id
     );
 
     $stmt->execute();
-
-    echo "<script>alert('Video uploaded successfully');</script>";
 }
 
-/* =========================
-   DELETE VIDEO (SAFE)
-========================= */
-if (isset($_GET['delete'])) {
 
-    $id = intval($_GET['delete']);
+/* =====================================================
+   DELETE VIDEO (SECURE FIXED)
+===================================================== */
+if (isset($_GET['delete_video'])) {
 
-    $old = $conn->query("
-        SELECT video_path 
-        FROM course_videos 
-        WHERE id=$id
-    ")->fetch_assoc();
+    $id = (int)$_GET['delete_video'];
+
+    $stmt = $conn->prepare("
+        SELECT video_path
+        FROM course_videos
+        WHERE id = ?
+    ");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+
+    $old = $stmt->get_result()->fetch_assoc();
 
     if ($old && file_exists($old['video_path'])) {
         unlink($old['video_path']);
     }
 
-    $conn->query("DELETE FROM course_videos WHERE id=$id");
-
-    header("Location: videos.php");
-    exit;
+    $stmt = $conn->prepare("
+        DELETE FROM course_videos
+        WHERE id = ?
+    ");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
 }
 
-/* =========================
-   VIEW VIDEO (SECURE)
-========================= */
-if (isset($_GET['view'])) {
 
-    $id = intval($_GET['view']);
+/* =====================================================
+   VIEW VIDEO (SECURE FIXED)
+===================================================== */
+if (isset($_GET['view_video'])) {
 
-    $video = $conn->query("
+    $id = (int)$_GET['view_video'];
+
+    $stmt = $conn->prepare("
         SELECT v.*, c.title AS course_title
         FROM course_videos v
-        JOIN courses c ON c.id = v.course_id
-        WHERE v.id = $id
-    ")->fetch_assoc();
+        INNER JOIN courses c ON c.id = v.course_id
+        INNER JOIN course_teachers ct ON ct.course_id = c.id
+        WHERE v.id = ?
+          AND ct.teacher_id = ?
+    ");
+
+    $stmt->bind_param("ii", $id, $teacher_id);
+    $stmt->execute();
+
+    $video = $stmt->get_result()->fetch_assoc();
 
     if (!$video) {
-        die("Video not found");
+        die("Video not found or access denied");
     }
 
     /* ENROLLMENT CHECK */
-    $check = $conn->query("
-        SELECT * FROM enrollments
-        WHERE user_id = $user_id
-        AND course_id = {$video['course_id']}
+    $stmt = $conn->prepare("
+        SELECT 1
+        FROM enrollments
+        WHERE user_id = ?
+          AND course_id = ?
+        LIMIT 1
     ");
 
-    $isEnrolled = $check->num_rows > 0;
+    $stmt->bind_param("ii", $user_id, $video['course_id']);
+    $stmt->execute();
 
-    if ($video['access_type'] == 'paid' && !$isEnrolled) {
+    $isEnrolled = $stmt->get_result()->num_rows > 0;
+
+    if ($video['access_type'] === 'paid' && !$isEnrolled) {
         die("<h2>Access Denied ❌</h2><p>You must enroll to watch this video.</p>");
     }
+
     ?>
 
     <div style="background:#000;padding:20px;color:#fff;">
-        <h2><?php echo htmlspecialchars($video['title']); ?></h2>
+        <h2><?= htmlspecialchars($video['title']) ?></h2>
 
         <video width="100%" controls controlsList="nodownload" oncontextmenu="return false">
-            <source src="<?php echo $video['video_path']; ?>" type="video/mp4">
+            <source src="<?= htmlspecialchars($video['video_path']) ?>" type="video/mp4">
         </video>
     </div>
 
@@ -346,75 +349,92 @@ if (isset($_GET['view'])) {
         document.addEventListener("contextmenu", e => e.preventDefault());
     </script>
 
-<?php exit; } ?>
+<?php exit; }
 
-<!-- =========================
-   FETCH VIDEOS
-========================= -->
-<?php
+
+/* =====================================================
+   FETCH VIDEOS (TEACHER ONLY)
+===================================================== */
 $videos = $conn->query("
-SELECT v.*, c.title AS course_title
-FROM course_videos v
-JOIN courses c ON c.id = v.course_id
-ORDER BY v.id DESC
+    SELECT v.*, c.title AS course_title
+    FROM course_videos v
+    JOIN courses c ON c.id = v.course_id
+    JOIN course_teachers ct ON ct.course_id = c.id
+    WHERE ct.teacher_id = $teacher_id
+    ORDER BY v.id DESC
 ");
 
 
-/* NOTES */
-$user_id = $_SESSION['user_id'];
-
-/* =========================
-   GET TEACHER ID
-========================= */
-$stmt = $conn->prepare("
-    SELECT id 
-    FROM teachers 
-    WHERE user_id = ?
-    LIMIT 1
-");
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-$teacher = $stmt->get_result()->fetch_assoc();
-
-if (!$teacher) {
-    die("Access denied");
-}
-
-$teacher_id = $teacher['id'];
-
-/* =========================
-   UPLOAD FOLDER
-========================= */
-$upload_dir = "uploads/notes/";
-if (!file_exists($upload_dir)) {
-    mkdir($upload_dir, 0777, true);
-}
-
-/* =========================
+/* =====================================================
    ADD NOTE
-========================= */
+===================================================== */
 if (isset($_POST['add_note'])) {
 
-    $course_id = intval($_POST['course_id']);
-    $title = trim($_POST['title']);
-    $content = trim($_POST['content']);
-    $access_type = $_POST['access_type'];
+    /* -------------------------
+       VERIFY TOKEN
+    ------------------------- */
+    if (
+        !isset($_POST['note_token']) ||
+        !hash_equals($_SESSION['note_token'], $_POST['note_token'])
+    ) {
+        die("Invalid or duplicate submission.");
+    }
+
+    $course_id = (int)$_POST['course_id'];
+
+    /* -------------------------
+       VERIFY COURSE OWNERSHIP
+    ------------------------- */
+    $check = $conn->prepare("
+        SELECT 1
+        FROM course_teachers
+        WHERE course_id = ?
+        AND teacher_id = ?
+        LIMIT 1
+    ");
+
+    $check->bind_param("ii", $course_id, $teacher_id);
+    $check->execute();
+
+    if ($check->get_result()->num_rows == 0) {
+        die("❌ Unauthorized course access");
+    }
+
+    $title       = trim($_POST['title'] ?? '');
+    $content     = trim($_POST['content'] ?? '');
+    $access_type = $_POST['access_type'] ?? 'free';
 
     $file_path = "";
 
-    if (!empty($_FILES['file']['name'])) {
+    /* -------------------------
+       FILE UPLOAD
+    ------------------------- */
+    if (
+        isset($_FILES['file']) &&
+        !empty($_FILES['file']['name'])
+    ) {
 
         $file_name = time() . "_" . basename($_FILES['file']['name']);
-        $target = $upload_dir . $file_name;
+        $target = $note_dir . $file_name;
 
-        move_uploaded_file($_FILES['file']['tmp_name'], $target);
-
-        $file_path = $target;
+        if (move_uploaded_file($_FILES['file']['tmp_name'], $target)) {
+            $file_path = $target;
+        }
     }
 
+    /* -------------------------
+       INSERT NOTE
+    ------------------------- */
     $stmt = $conn->prepare("
         INSERT INTO notes
-        (course_id, title, content, access_type, created_by, file_path)
+        (
+            course_id,
+            title,
+            content,
+            access_type,
+            created_by,
+            file_path
+        )
         VALUES (?, ?, ?, ?, ?, ?)
     ");
 
@@ -428,143 +448,159 @@ if (isset($_POST['add_note'])) {
         $file_path
     );
 
-    $stmt->execute();
+    if ($stmt->execute()) {
 
-    echo "<script>alert('Note uploaded successfully');</script>";
+        /* Generate new token */
+        $_SESSION['note_token'] = bin2hex(random_bytes(32));
+
+        $_SESSION['success_message'] =
+            "Note added successfully.";
+
+        /* IMPORTANT:
+           Redirect to same page
+           prevents resubmission on refresh
+        */
+        header("Location: " . $_SERVER['REQUEST_URI']);
+        exit;
+
+    } else {
+
+        $_SESSION['error_message'] =
+            "Failed to save note.";
+
+        header("Location: " . $_SERVER['REQUEST_URI']);
+        exit;
+    }
 }
 
-/* =========================
+/* =====================================================
+   SUCCESS / ERROR MESSAGE
+===================================================== */
+if (isset($_SESSION['success_message'])) {
+    echo '<div class="alert alert-success">'
+        . htmlspecialchars($_SESSION['success_message'])
+        . '</div>';
+
+    unset($_SESSION['success_message']);
+}
+
+if (isset($_SESSION['error_message'])) {
+    echo '<div class="alert alert-danger">'
+        . htmlspecialchars($_SESSION['error_message'])
+        . '</div>';
+
+    unset($_SESSION['error_message']);
+}
+
+/* =====================================================
+   FETCH NOTES
+===================================================== */
+$notes = $conn->query("
+    SELECT n.*, c.title AS course_title
+    FROM notes n
+    JOIN courses c ON c.id = n.course_id
+    JOIN course_teachers ct ON ct.course_id = c.id
+    WHERE ct.teacher_id = $teacher_id
+    ORDER BY n.id DESC
+");
+
+/* =====================================================
    DELETE NOTE
-========================= */
-if (isset($_GET['delete'])) {
+===================================================== */
+if (isset($_GET['delete_note'])) {
 
-    $id = intval($_GET['delete']);
+    $id = (int)$_GET['delete_note'];
 
-    $old = $conn->query("
-        SELECT file_path 
-        FROM notes 
-        WHERE id=$id
-    ")->fetch_assoc();
+    $stmt = $conn->prepare("
+        DELETE n
+        FROM notes n
+        JOIN course_teachers ct
+            ON ct.course_id = n.course_id
+        WHERE n.id = ?
+        AND ct.teacher_id = ?
+    ");
 
-    if ($old && !empty($old['file_path']) && file_exists($old['file_path'])) {
-        unlink($old['file_path']);
-    }
+    $stmt->bind_param("ii", $id, $teacher_id);
+    $stmt->execute();
 
-    $conn->query("DELETE FROM notes WHERE id=$id");
-
-    header("Location: teacher_notes.php");
+    header("Location: " . strtok($_SERVER['REQUEST_URI'], '?'));
     exit;
 }
 
-/* =========================
-   VIEW NOTE (SECURE)
-========================= */
-if (isset($_GET['view'])) {
+/* =====================================================
+   VIEW NOTE
+===================================================== */
+if (isset($_GET['view_note'])) {
 
-    $note_id = intval($_GET['view']);
+    $note_id = (int)$_GET['view_note'];
 
-    $note = $conn->query("
+    $stmt = $conn->prepare("
         SELECT n.*, c.title AS course_title
         FROM notes n
         JOIN courses c ON c.id = n.course_id
-        WHERE n.id = $note_id
-    ")->fetch_assoc();
+        JOIN course_teachers ct ON ct.course_id = c.id
+        WHERE n.id = ?
+        AND ct.teacher_id = ?
+    ");
+
+    $stmt->bind_param("ii", $note_id, $teacher_id);
+    $stmt->execute();
+
+    $note = $stmt->get_result()->fetch_assoc();
 
     if (!$note) {
         die("Note not found");
     }
 
-    /* ENROLLMENT CHECK */
-    $check = $conn->query("
-        SELECT * FROM enrollments 
-        WHERE user_id = $user_id
-        AND course_id = {$note['course_id']}
+    $stmt = $conn->prepare("
+        SELECT 1
+        FROM enrollments
+        WHERE user_id = ?
+        AND course_id = ?
+        LIMIT 1
     ");
 
-    $isEnrolled = $check->num_rows > 0;
+    $stmt->bind_param("ii", $user_id, $note['course_id']);
+    $stmt->execute();
 
-    if ($note['access_type'] == 'paid' && !$isEnrolled) {
-        die("<h2>Access Denied ❌</h2><p>You must enroll to access this note.</p>");
+    $isEnrolled = $stmt->get_result()->num_rows > 0;
+
+    if (
+        $note['access_type'] === 'paid' &&
+        !$isEnrolled
+    ) {
+        die("Access Denied ❌");
     }
-?>
-
-<div style="padding:20px;font-family:Arial;user-select:none;">
-
-    <h2><?php echo htmlspecialchars($note['title']); ?></h2>
-
-    <?php if (!empty($note['file_path'])) { ?>
-        <iframe src="<?php echo $note['file_path']; ?>" width="100%" height="500px"></iframe>
-    <?php } ?>
-
-    <p style="white-space:pre-line;">
-        <?php echo htmlspecialchars($note['content']); ?>
-    </p>
-
-</div>
-
-<script>
-document.addEventListener("contextmenu", e => e.preventDefault());
-document.addEventListener("copy", e => e.preventDefault());
-document.addEventListener("cut", e => e.preventDefault());
-document.addEventListener("paste", e => e.preventDefault());
-</script>
-
-<?php exit; } ?>
-
-<?php
-/* =========================
-   FETCH NOTES (TEACHER ONLY)
-========================= */
-$notes = $conn->query("
-SELECT n.*, c.title AS course_title
-FROM notes n
-JOIN courses c ON c.id = n.course_id
-JOIN course_teachers ct ON ct.course_id = c.id
-WHERE ct.teacher_id = $teacher_id
-ORDER BY n.id DESC
-");
-
-
-/* QUIZS */
-$user_id = $_SESSION['user_id'];
-
-/* =========================
-   GET TEACHER ID
-========================= */
-$stmt = $conn->prepare("
-    SELECT id 
-    FROM teachers 
-    WHERE user_id = ?
-    LIMIT 1
-");
-$stmt->bind_param("i", $user_id);
-$stmt->execute();
-
-$teacher = $stmt->get_result()->fetch_assoc();
-
-if (!$teacher) {
-    die("Access denied: Teacher account required");
 }
 
-$teacher_id = $teacher['id'];
+/* =====================================================
+   FETCH NOTES (TEACHER ONLY)
+===================================================== */
+$notes = $conn->query("
+    SELECT n.*, c.title AS course_title
+    FROM notes n
+    JOIN courses c ON c.id = n.course_id
+    JOIN course_teachers ct ON ct.course_id = c.id
+    WHERE ct.teacher_id = $teacher_id
+    ORDER BY n.id DESC
+");
 
-/* =========================
-   CREATE QUIZ
-========================= */
+
+/* =====================================================
+   CREATE QUIZ (SECURE FIXED)
+===================================================== */
 if (isset($_POST['create_quiz'])) {
 
-    $course_id = intval($_POST['course_id']);
-    $title = trim($_POST['title']);
-    $description = trim($_POST['description']);
-    $passing_marks = intval($_POST['passing_marks']);
-    $duration = intval($_POST['duration']);
+    $course_id = (int)$_POST['course_id'];
 
-    /* ensure teacher owns course */
     $check = $conn->prepare("
-        SELECT ct.course_id 
-        FROM course_teachers ct
-        WHERE ct.course_id = ? AND ct.teacher_id = ?
+        SELECT 1
+        FROM course_teachers
+        WHERE course_id = ?
+          AND teacher_id = ?
+        LIMIT 1
     ");
+
     $check->bind_param("ii", $course_id, $teacher_id);
     $check->execute();
 
@@ -581,39 +617,32 @@ if (isset($_POST['create_quiz'])) {
     $stmt->bind_param(
         "issii",
         $course_id,
-        $title,
-        $description,
-        $passing_marks,
-        $duration
+        $_POST['title'],
+        $_POST['description'],
+        $_POST['passing_marks'],
+        $_POST['duration']
     );
 
     $stmt->execute();
 }
 
-/* =========================
-   ADD QUESTION
-========================= */
+
+/* =====================================================
+   ADD QUESTION (SECURE FIXED)
+===================================================== */
 if (isset($_POST['add_question'])) {
 
-    $quiz_id = intval($_POST['quiz_id']);
-    $question = trim($_POST['question']);
-    $question_type = $_POST['question_type'];
+    $quiz_id = (int)$_POST['quiz_id'];
 
-    $option_a = $_POST['option_a'] ?? null;
-    $option_b = $_POST['option_b'] ?? null;
-    $option_c = $_POST['option_c'] ?? null;
-    $option_d = $_POST['option_d'] ?? null;
-
-    $correct_answer = trim($_POST['correct_answer']);
-    $marks = intval($_POST['marks']);
-
-    /* check quiz belongs to teacher */
     $check = $conn->prepare("
-        SELECT q.id 
+        SELECT 1
         FROM quizzes q
         JOIN course_teachers ct ON ct.course_id = q.course_id
-        WHERE q.id = ? AND ct.teacher_id = ?
+        WHERE q.id = ?
+          AND ct.teacher_id = ?
+        LIMIT 1
     ");
+
     $check->bind_param("ii", $quiz_id, $teacher_id);
     $check->execute();
 
@@ -623,459 +652,437 @@ if (isset($_POST['add_question'])) {
 
     $stmt = $conn->prepare("
         INSERT INTO quiz_questions
-        (quiz_id, question, question_type, option_a, option_b, option_c, option_d, correct_answer, marks)
+        (quiz_id, question, question_type,
+         option_a, option_b, option_c, option_d,
+         correct_answer, marks)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
 
     $stmt->bind_param(
         "isssssssi",
         $quiz_id,
-        $question,
-        $question_type,
-        $option_a,
-        $option_b,
-        $option_c,
-        $option_d,
-        $correct_answer,
-        $marks
+        $_POST['question'],
+        $_POST['question_type'],
+        $_POST['option_a'],
+        $_POST['option_b'],
+        $_POST['option_c'],
+        $_POST['option_d'],
+        $_POST['correct_answer'],
+        $_POST['marks']
     );
 
     $stmt->execute();
 }
 
-/* =========================
-   STATS (TEACHER ONLY)
-========================= */
 
-$total_quizzes = $conn->query("
+/* =====================================================
+   QUIZ STATS (SAFE FIXED)
+===================================================== */
+
+function fetchCount($conn, $sql, $teacher_id) {
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $teacher_id);
+    $stmt->execute();
+    return $stmt->get_result()->fetch_assoc()['total'] ?? 0;
+}
+
+$total_quizzes = fetchCount($conn, "
     SELECT COUNT(*) AS total
     FROM quizzes q
     JOIN course_teachers ct ON ct.course_id = q.course_id
-    WHERE ct.teacher_id = $teacher_id
-")->fetch_assoc()['total'] ?? 0;
+    WHERE ct.teacher_id = ?
+", $teacher_id);
 
-$total_questions = $conn->query("
+$total_questions = fetchCount($conn, "
     SELECT COUNT(*) AS total
     FROM quiz_questions qq
     JOIN quizzes q ON q.id = qq.quiz_id
     JOIN course_teachers ct ON ct.course_id = q.course_id
-    WHERE ct.teacher_id = $teacher_id
-")->fetch_assoc()['total'] ?? 0;
+    WHERE ct.teacher_id = ?
+", $teacher_id);
 
-$total_attempts = $conn->query("
+$total_attempts = fetchCount($conn, "
     SELECT COUNT(*) AS total
     FROM quiz_attempts qa
     JOIN quizzes q ON q.id = qa.quiz_id
     JOIN course_teachers ct ON ct.course_id = q.course_id
-    WHERE ct.teacher_id = $teacher_id
-")->fetch_assoc()['total'] ?? 0;
+    WHERE ct.teacher_id = ?
+", $teacher_id);
 
-$passed = $conn->query("
+$passed = fetchCount($conn, "
     SELECT COUNT(*) AS total
     FROM quiz_attempts qa
     JOIN quizzes q ON q.id = qa.quiz_id
     JOIN course_teachers ct ON ct.course_id = q.course_id
-    WHERE ct.teacher_id = $teacher_id AND qa.result='Pass'
-")->fetch_assoc()['total'] ?? 0;
+    WHERE ct.teacher_id = ? AND qa.result='Pass'
+", $teacher_id);
 
-$failed = $conn->query("
+$failed = fetchCount($conn, "
     SELECT COUNT(*) AS total
     FROM quiz_attempts qa
     JOIN quizzes q ON q.id = qa.quiz_id
     JOIN course_teachers ct ON ct.course_id = q.course_id
-    WHERE ct.teacher_id = $teacher_id AND qa.result='Fail'
-")->fetch_assoc()['total'] ?? 0;
+    WHERE ct.teacher_id = ? AND qa.result='Fail'
+", $teacher_id);
 
-$average_score = $conn->query("
+$stmt = $conn->prepare("
     SELECT AVG(qa.score) AS avg_score
     FROM quiz_attempts qa
     JOIN quizzes q ON q.id = qa.quiz_id
     JOIN course_teachers ct ON ct.course_id = q.course_id
-    WHERE ct.teacher_id = $teacher_id
-")->fetch_assoc()['avg_score'] ?? 0;
-
-/* STUDENT MANAGEMENT*/
-$user_id = $_SESSION['user_id'];
-
-$getTeacher = mysqli_query($conn,"
-    SELECT id 
-    FROM teachers 
-    WHERE user_id = $user_id
+    WHERE ct.teacher_id = ?
 ");
+$stmt->bind_param("i", $teacher_id);
+$stmt->execute();
 
-$teacherData = mysqli_fetch_assoc($getTeacher);
-$teacher_id = $teacherData['id'];
+$average_score = $stmt->get_result()->fetch_assoc()['avg_score'] ?? 0;
+/* =====================================================
+   STUDENT ACTIONS (SECURE FIXED)
+===================================================== */
+if (isset($_POST['student_action'])) {
 
-/* =========================
-   STUDENT ACTIONS (SAFE + SYNCED)
-========================= */
-
-if(isset($_POST['student_action'])){
-
-    $student_id = intval($_POST['student_id']);
+    $student_id = (int)$_POST['student_id'];
     $action = $_POST['action'];
 
-    /* GET STUDENT USER ID */
-    $student = mysqli_fetch_assoc(mysqli_query($conn,"
-        SELECT user_id 
-        FROM students 
-        WHERE id=$student_id
-    "));
+    // Get user_id from student table
+    $stmt = $conn->prepare("
+        SELECT user_id
+        FROM students
+        WHERE id = ?
+    ");
+    $stmt->bind_param("i", $student_id);
+    $stmt->execute();
+    $student = $stmt->get_result()->fetch_assoc();
 
-    if(!$student){
+    if (!$student) {
         die("Student not found");
     }
 
     $userId = $student['user_id'];
 
-    /* ACTIVATE */
-    if($action == "activate"){
+    if ($action === "activate") {
 
-        mysqli_query($conn,"
-            UPDATE students
-            SET status='active'
-            WHERE id=$student_id
-        ");
+        $stmt = $conn->prepare("UPDATE students SET status='active' WHERE id=?");
+        $stmt->bind_param("i", $student_id);
+        $stmt->execute();
 
-        mysqli_query($conn,"
-            UPDATE users
-            SET status='active'
-            WHERE id=$userId
-        ");
+        $stmt = $conn->prepare("UPDATE users SET status='active' WHERE id=?");
+        $stmt->bind_param("i", $userId);
+        $stmt->execute();
     }
 
-    /* SUSPEND */
-    if($action == "suspend"){
+    if ($action === "suspend") {
 
-        mysqli_query($conn,"
-            UPDATE students
-            SET status='suspended'
-            WHERE id=$student_id
-        ");
+        $stmt = $conn->prepare("UPDATE students SET status='suspended' WHERE id=?");
+        $stmt->bind_param("i", $student_id);
+        $stmt->execute();
 
-        mysqli_query($conn,"
-            UPDATE users
-            SET status='suspended'
-            WHERE id=$userId
-        ");
+        $stmt = $conn->prepare("UPDATE users SET status='suspended' WHERE id=?");
+        $stmt->bind_param("i", $userId);
+        $stmt->execute();
     }
 
-    /* RESET PASSWORD */
-    if($action == "reset_password"){
+    if ($action === "reset_password") {
 
         $newPass = password_hash("123456", PASSWORD_DEFAULT);
 
-        mysqli_query($conn,"
-            UPDATE users
-            SET password='$newPass'
-            WHERE id=$userId
-        ");
+        $stmt = $conn->prepare("UPDATE users SET password=? WHERE id=?");
+        $stmt->bind_param("si", $newPass, $userId);
+        $stmt->execute();
     }
 
-    /* DELETE */
-    if($action == "delete"){
+    if ($action === "delete") {
 
-        mysqli_query($conn,"
-            DELETE FROM enrollments
-            WHERE user_id=$userId
-        ");
+        $stmt = $conn->prepare("DELETE FROM enrollments WHERE user_id=?");
+        $stmt->bind_param("i", $userId);
+        $stmt->execute();
 
-        mysqli_query($conn,"
-            DELETE FROM students
-            WHERE id=$student_id
-        ");
+        $stmt = $conn->prepare("DELETE FROM students WHERE id=?");
+        $stmt->bind_param("i", $student_id);
+        $stmt->execute();
 
-        mysqli_query($conn,"
-            DELETE FROM users
-            WHERE id=$userId
-        ");
+        $stmt = $conn->prepare("DELETE FROM users WHERE id=?");
+        $stmt->bind_param("i", $userId);
+        $stmt->execute();
     }
 }
 
-/* =========================
-   ENROLLMENT ACTIONS (TEACHER SAFE)
-========================= */
 
-if(isset($_POST['enroll_action'])){
+/* =====================================================
+   ENROLLMENT ACTIONS (SECURE FIXED)
+===================================================== */
+if (isset($_POST['enroll_action'])) {
 
-    $enroll_id = intval($_POST['enroll_id']);
+    $enroll_id = (int)$_POST['enroll_id'];
     $action = $_POST['action'];
 
-    /* VERIFY ENROLLMENT BELONGS TO TEACHER */
-    $check = mysqli_fetch_assoc(mysqli_query($conn,"
+    $check = $conn->prepare("
         SELECT e.id
         FROM enrollments e
         JOIN course_teachers ct ON ct.course_id = e.course_id
-        WHERE e.id = $enroll_id
-        AND ct.teacher_id = $teacher_id
-    "));
+        WHERE e.id = ? AND ct.teacher_id = ?
+    ");
+    $check->bind_param("ii", $enroll_id, $teacher_id);
+    $check->execute();
 
-    if(!$check){
+    if ($check->get_result()->num_rows == 0) {
         die("Unauthorized enrollment action");
     }
 
-    if($action == "approve"){
+    if ($action === "approve") {
 
-        mysqli_query($conn,"
-            UPDATE enrollments
-            SET status='approved'
-            WHERE id=$enroll_id
+        $stmt = $conn->prepare("
+            UPDATE enrollments 
+            SET status='approved' 
+            WHERE id=?
         ");
-    }
+        $stmt->bind_param("i", $enroll_id);
+        $stmt->execute();
 
-    if($action == "reject"){
+    } elseif ($action === "reject") {
 
-        mysqli_query($conn,"
-            UPDATE enrollments
-            SET status='rejected'
-            WHERE id=$enroll_id
+        $stmt = $conn->prepare("
+            UPDATE enrollments 
+            SET status='rejected' 
+            WHERE id=?
         ");
-    }
+        $stmt->bind_param("i", $enroll_id);
+        $stmt->execute();
 
-    if($action == "delete"){
+    } elseif ($action === "delete") {
 
-        mysqli_query($conn,"
-            DELETE FROM enrollments
-            WHERE id=$enroll_id
+        $stmt = $conn->prepare("
+            DELETE FROM enrollments 
+            WHERE id=?
         ");
+        $stmt->bind_param("i", $enroll_id);
+        $stmt->execute();
     }
 }
-
-/* =========================
-   FETCH STUDENTS (ONLY TEACHER COURSES)
-========================= */
-
-$students = mysqli_query($conn,"
-SELECT DISTINCT
-    s.*
+/* =====================================================
+   FETCH STUDENTS (SAFE)
+===================================================== */
+$stmt = $conn->prepare("
+SELECT DISTINCT s.*
 FROM students s
 JOIN enrollments e ON e.user_id = s.user_id
 JOIN course_teachers ct ON ct.course_id = e.course_id
-WHERE ct.teacher_id = $teacher_id
+WHERE ct.teacher_id = ?
 ORDER BY s.id DESC
 ");
+$stmt->bind_param("i", $teacher_id);
+$stmt->execute();
+$students = $stmt->get_result();
 
-/* =========================
-   FETCH ENROLLMENTS (ONLY TEACHER COURSES)
-========================= */
 
-$enrollments = mysqli_query($conn,"
-SELECT
-    e.*,
-    u.full_name,
-    c.title
+/* =====================================================
+   FETCH ENROLLMENTS (SAFE)
+===================================================== */
+$stmt = $conn->prepare("
+SELECT e.*, u.full_name, c.title
 FROM enrollments e
 JOIN users u ON u.id = e.user_id
 JOIN courses c ON c.id = e.course_id
 JOIN course_teachers ct ON ct.course_id = c.id
-WHERE ct.teacher_id = $teacher_id
+WHERE ct.teacher_id = ?
 ORDER BY e.id DESC
 ");
+$stmt->bind_param("i", $teacher_id);
+$stmt->execute();
+$enrollments = $stmt->get_result();
 
-/* REPORT */
-$user_id = $_SESSION['user_id'];
 
-$getTeacher = $conn->prepare("
-    SELECT id 
-    FROM teachers 
-    WHERE user_id = ?
-");
-$getTeacher->bind_param("i", $user_id);
-$getTeacher->execute();
-$teacher = $getTeacher->get_result()->fetch_assoc();
-
-if(!$teacher){
-    die("Access denied: Not a teacher account");
+/* =====================================================
+   TOTAL STATS (SAFE FUNCTION)
+===================================================== */
+function getCount($conn, $sql, $teacher_id) {
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $teacher_id);
+    $stmt->execute();
+    return $stmt->get_result()->fetch_assoc()['total'] ?? 0;
 }
 
-$teacher_id = $teacher['id'];
-
-/* =========================
-   TOTAL COURSES
-========================= */
-
-$total_courses = $conn->query("
+$total_courses = getCount($conn, "
 SELECT COUNT(*) AS total
 FROM course_teachers
-WHERE teacher_id=$teacher_id
-")->fetch_assoc()['total'];
+WHERE teacher_id = ?
+", $teacher_id);
 
-/* =========================
-   TOTAL STUDENTS
-========================= */
-
-$total_students = $conn->query("
+$total_students = getCount($conn, "
 SELECT COUNT(DISTINCT e.user_id) AS total
 FROM enrollments e
 JOIN course_teachers ct ON ct.course_id = e.course_id
-WHERE ct.teacher_id=$teacher_id
-")->fetch_assoc()['total'];
+WHERE ct.teacher_id = ?
+", $teacher_id);
 
-/* =========================
-   TOTAL CONTENT
-========================= */
-
-$total_content = $conn->query("
+$total_content = getCount($conn, "
 SELECT COUNT(*) AS total
 FROM course_contents cc
 JOIN course_teachers ct ON ct.course_id = cc.course_id
-WHERE ct.teacher_id=$teacher_id
-")->fetch_assoc()['total'];
+WHERE ct.teacher_id = ?
+", $teacher_id);
 
-/* =========================
-   TOTAL VIDEOS
-========================= */
-
-$total_videos = $conn->query("
+$total_videos = getCount($conn, "
 SELECT COUNT(*) AS total
 FROM course_videos v
 JOIN course_teachers ct ON ct.course_id = v.course_id
-WHERE ct.teacher_id=$teacher_id
-")->fetch_assoc()['total'];
+WHERE ct.teacher_id = ?
+", $teacher_id);
 
-/* =========================
-   TOTAL NOTES
-========================= */
-
-$total_notes = $conn->query("
+$total_notes = getCount($conn, "
 SELECT COUNT(*) AS total
 FROM notes n
 JOIN course_teachers ct ON ct.course_id = n.course_id
-WHERE ct.teacher_id=$teacher_id
-")->fetch_assoc()['total'];
+WHERE ct.teacher_id = ?
+", $teacher_id);
 
-/* =========================
+
+/* =====================================================
    REVENUE
-========================= */
-
-$revenue = $conn->query("
+===================================================== */
+$stmt = $conn->prepare("
 SELECT COALESCE(SUM(p.amount),0) AS total_revenue
 FROM payments p
 JOIN enrollments e ON e.user_id = p.user_id
 JOIN course_teachers ct ON ct.course_id = e.course_id
-WHERE ct.teacher_id=$teacher_id
+WHERE ct.teacher_id = ?
 AND p.status='success'
-")->fetch_assoc()['total_revenue'];
+");
+$stmt->bind_param("i", $teacher_id);
+$stmt->execute();
+$revenue = $stmt->get_result()->fetch_assoc()['total_revenue'];
 
-/* =========================
+
+/* =====================================================
    TOP COURSES
-========================= */
-
+===================================================== */
 $top_courses = $conn->query("
-SELECT 
-    c.title,
-    COUNT(e.id) AS students
+SELECT c.title, COUNT(e.id) AS students
 FROM courses c
 JOIN course_teachers ct ON ct.course_id = c.id
 LEFT JOIN enrollments e ON e.course_id = c.id
-WHERE ct.teacher_id=$teacher_id
-GROUP BY c.id
+WHERE ct.teacher_id = $teacher_id
+GROUP BY c.id, c.title
 ORDER BY students DESC
 LIMIT 5
 ");
 
 
- /* ANNOUNCEMENT */
- if (!isset($_SESSION['user_id'])) {
-    die("Not logged in");
-}
-
-$user_id = $_SESSION['user_id'];
-
-$getTeacher = $conn->prepare("
-    SELECT id 
-    FROM teachers 
-    WHERE user_id = ?
-");
-$getTeacher->bind_param("i", $user_id);
-$getTeacher->execute();
-$teacher = $getTeacher->get_result()->fetch_assoc();
-
-if (!$teacher) {
-    die("Access denied: Not a teacher");
-}
-
-$teacher_id = $teacher['id'];
-
-/* =========================
-   CREATE ANNOUNCEMENT
-========================= */
-
-if (isset($_POST['add'])) {
-
-    $course_id = intval($_POST['course_id']);
-    $title = trim($_POST['title']);
-    $message = trim($_POST['message']);
-
-    // Ensure teacher owns course
-    $check = $conn->prepare("
-        SELECT 1 
-        FROM course_teachers 
-        WHERE course_id = ? AND teacher_id = ?
-    ");
-    $check->bind_param("ii", $course_id, $teacher_id);
-    $check->execute();
-
-    if ($check->get_result()->num_rows == 0) {
-        die("Unauthorized course access");
-    }
-
-    $stmt = $conn->prepare("
-        INSERT INTO announcements (course_id, teacher_id, title, message)
-        VALUES (?, ?, ?, ?)
-    ");
-    $stmt->bind_param("iiss", $course_id, $teacher_id, $title, $message);
-    $stmt->execute();
-}
-
-/* =========================
-   DELETE ANNOUNCEMENT
-========================= */
-
-if (isset($_GET['delete'])) {
-
-    $id = intval($_GET['delete']);
-
-    $conn->query("
-        DELETE FROM announcements
-        WHERE id = $id AND teacher_id = $teacher_id
-    ");
-}
-
-/* =========================
-   COURSES (ONLY TEACHER)
-========================= */
-
+/* =====================================================
+   COURSES LIST
+===================================================== */
 $courses = $conn->query("
 SELECT c.id, c.title
 FROM courses c
 JOIN course_teachers ct ON ct.course_id = c.id
 WHERE ct.teacher_id = $teacher_id
+ORDER BY c.title
 ");
 
-/* =========================
-   ANNOUNCEMENTS LIST
-========================= */
 
-$announcements = $conn->query("
-SELECT a.*, c.title AS course
-FROM announcements a
-JOIN courses c ON c.id = a.course_id
-WHERE a.teacher_id = $teacher_id
-ORDER BY a.created_at DESC
-");
+if (isset($_POST['add_announcement'])) {
 
- /*PROFILE */
-if(isset($_POST['update_profile'])){
+    $course_id = (int)$_POST['course_id'];
+    $title = trim($_POST['title']);
+    $message = trim($_POST['message']);
 
-    $specialization = $_POST['specialization'];
-    $qualification = $_POST['qualification'];
-    $experience_years = $_POST['experience_years'];
+    if ($course_id <= 0 || empty($title) || empty($message)) {
+        die("Invalid input");
+    }
+
+    // Ensure teacher owns the course
+    $check = $conn->prepare("
+        SELECT 1
+        FROM course_teachers
+        WHERE course_id = ?
+          AND teacher_id = ?
+        LIMIT 1
+    ");
+
+    $check->bind_param("ii", $course_id, $teacher_id);
+    $check->execute();
+
+    if ($check->get_result()->num_rows === 0) {
+        die("Unauthorized course access");
+    }
+
+    // Insert announcement
+    $stmt = $conn->prepare("
+        INSERT INTO announcements (course_id, teacher_id, title, message)
+        VALUES (?, ?, ?, ?)
+    ");
+
+    $stmt->bind_param("iiss", $course_id, $teacher_id, $title, $message);
+    $stmt->execute();
+}
+
+if (isset($_GET['delete_announcement'])) {
+
+    $id = (int)$_GET['delete_announcement'];
 
     $stmt = $conn->prepare("
+        DELETE a
+        FROM announcements a
+        INNER JOIN course_teachers ct ON ct.course_id = a.course_id
+        WHERE a.id = ?
+          AND ct.teacher_id = ?
+    ");
+
+    $stmt->bind_param("ii", $id, $teacher_id);
+    $stmt->execute();
+}
+
+$stmt = $conn->prepare("
+    SELECT 
+        a.id,
+        a.title,
+        a.message,
+        a.created_at,
+        c.title AS course
+    FROM announcements a
+    INNER JOIN course_teachers ct ON ct.course_id = a.course_id
+    INNER JOIN courses c ON c.id = a.course_id
+    WHERE ct.teacher_id = ?
+    ORDER BY a.created_at DESC
+");
+
+$stmt->bind_param("i", $teacher_id);
+$stmt->execute();
+
+$announcements = $stmt->get_result();
+$announcementCourses = $conn->prepare("
+    SELECT c.id, c.title
+    FROM courses c
+    INNER JOIN course_teachers ct ON ct.course_id = c.id
+    WHERE ct.teacher_id = ?
+    ORDER BY c.title
+");
+
+$announcementCourses->bind_param("i", $teacher_id);
+$announcementCourses->execute();
+
+$announcementList = $announcementCourses->get_result();
+
+/* =====================================================
+   PROFILE UPDATE (FIXED)
+===================================================== */
+if (isset($_POST['update_profile'])) {
+
+    $specialization = trim($_POST['specialization'] ?? '');
+    $qualification = trim($_POST['qualification'] ?? '');
+    $experience_years = (int)($_POST['experience_years'] ?? 0);
+
+    if ($experience_years < 0 || $experience_years > 60) {
+        die("Invalid experience value");
+    }
+
+    // FIX: correct column is user_id, NOT id
+    $stmt = $conn->prepare("
         UPDATE teachers
-        SET specialization = ?, qualification = ?, experience_years = ?
-        WHERE id = ?
+        SET specialization = ?,
+            qualification = ?,
+            experience_years = ?
+        WHERE user_id = ?
     ");
 
     $stmt->bind_param(
@@ -1083,11 +1090,23 @@ if(isset($_POST['update_profile'])){
         $specialization,
         $qualification,
         $experience_years,
-        $teacher_id
+        $user_id
     );
 
     $stmt->execute();
 }
+$teacherCoursesList = $conn->prepare("
+    SELECT c.id, c.title, c.price, c.status
+    FROM courses c
+    INNER JOIN course_teachers ct ON ct.course_id = c.id
+    WHERE ct.teacher_id = ?
+    ORDER BY c.created_at DESC
+");
+
+$teacherCoursesList->bind_param("i", $teacher_id);
+$teacherCoursesList->execute();
+
+$teacherCourses = $teacherCoursesList->get_result();
 ?>
 
 <!DOCTYPE html>
@@ -1209,8 +1228,7 @@ table th{background:rgb(65, 110, 181);color:white;}
                 <th>Status</th>
             </tr>
 
-            <?php while($row = $courses->fetch_assoc()) { ?>
-
+            <?php while($row = $teacherCourses->fetch_assoc()) { ?>
                 <?php
                 $course_id = $row['id'];
 
@@ -1228,12 +1246,21 @@ table th{background:rgb(65, 110, 181);color:white;}
                     ->fetch_assoc()['total'];
                 ?>
 
-                <tr>
-                    <td><?php echo htmlspecialchars($row['title']); ?></td>
-                    <td>KES <?php echo number_format($row['price']); ?></td>
-                    <td><b><?php echo $enrolled; ?></b></td>
-                    <td><?php echo htmlspecialchars($row['status']); ?></td>
-                </tr>
+<tr>
+    <td><?php echo htmlspecialchars($row['title'] ?? ''); ?></td>
+
+    <td>
+        KES <?php echo number_format($row['price'] ?? 0); ?>
+    </td>
+
+    <td>
+        <b><?php echo $enrolled ?? 0; ?></b>
+    </td>
+
+    <td>
+        <?php echo htmlspecialchars($row['status'] ?? 'Inactive'); ?>
+    </td>
+</tr>
 
             <?php } ?>
 
@@ -1260,45 +1287,78 @@ table th{background:rgb(65, 110, 181);color:white;}
 
 </div>
 
-<!-- My_COURSE ---> 
- <div class="box" id="My_CourseSection" style="display:none;">
- <style>
-body{font-family:Arial;background:#f5f6fa;margin:0;}
-.container{padding:20px;margin-left:0;}
 
-/* CARDS */
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:15px;}
+
+<!-- My_COURSE ---> 
+<div class="box" id="My_CourseSection" style="display:none;">
+
+<style>
+.container{
+    padding:20px;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+    gap:15px;
+}
 
 .card{
-background:#fff;padding:15px;border-radius:10px;
-box-shadow:0 2px 10px rgba(0,0,0,.08);
+    background:#fff;
+    padding:15px;
+    border-radius:10px;
+    box-shadow:0 2px 10px rgba(0,0,0,.08);
+}
+
+.card h3{
+    margin-top:0;
+    color:#111827;
 }
 
 .btn{
-padding:6px 10px;border:none;border-radius:5px;
-color:#fff;cursor:pointer;font-size:12px;
+    padding:8px 12px;
+    border:none;
+    border-radius:5px;
+    color:#fff;
+    cursor:pointer;
+    font-size:12px;
+    text-decoration:none;
+    display:inline-block;
 }
+
 .view{background:#16a34a;}
 .edit{background:#f59e0b;}
 .del{background:#dc2626;}
 .content{background:#2563eb;}
 
-/* MODAL */
 .modal{
-display:none;
-position:fixed;
-top:0;left:0;
-width:100%;height:100%;
-background:rgba(0,0,0,.6);
-justify-content:center;
-align-items:center;
+    display:none;
+    position:fixed;
+    top:0;
+    left:0;
+    width:100%;
+    height:100%;
+    background:rgba(0,0,0,.6);
+    justify-content:center;
+    align-items:center;
+    z-index:9999;
 }
 
 .modal-box{
-background:#fff;
-padding:20px;
-width:500px;
-border-radius:10px;
+    background:#fff;
+    padding:20px;
+    width:500px;
+    max-width:95%;
+    border-radius:10px;
+}
+
+.modal-box input,
+.modal-box textarea{
+    width:100%;
+    padding:10px;
+    border:1px solid #ddd;
+    border-radius:5px;
+    box-sizing:border-box;
 }
 </style>
 
@@ -1308,93 +1368,127 @@ border-radius:10px;
 
 <div class="grid">
 
-<?php while($row = $courses->fetch_assoc()) { ?>
+<?php if (!empty($courses) && $courses->num_rows > 0): ?>
 
-<div class="card">
+    <?php while($row = $allcourses->fetch_assoc()): ?>
 
-<h3><?php echo $row['title']; ?></h3>
-<p><?php echo $row['category']; ?></p>
+        <?php
+            $id = (int)$row['id'];
+            $title = htmlspecialchars($row['title'] ?? '');
+            $desc = htmlspecialchars($row['description'] ?? '');
+            $price = (float)($row['price'] ?? 0);
+        ?>
 
-<p>👨‍🎓 Students: <b><?php echo $row['students']; ?></b></p>
-<p>📂 Content: <b><?php echo $row['contents']; ?></b></p>
-<p>💰 Price: KES <?php echo number_format($row['price']); ?></p>
+        <div class="card">
 
-<hr>
+            <h3><?= $title ?></h3>
 
-<div style="display:flex;gap:5px;flex-wrap:wrap;">
+            <?php if (!empty($desc)): ?>
+                <p><?= $desc ?></p>
+            <?php endif; ?>
 
+            <p>👨‍🎓 Students: <b><?= (int)($row['students'] ?? 0) ?></b></p>
 
-<button class="btn edit" onclick="editCourse(
-<?php echo $row['id']; ?>,
-`<?php echo addslashes($row['title']); ?>`,
-`<?php echo addslashes($row['description']); ?>`,
-<?php echo $row['price']; ?>
-)">Edit</button>
+            <p>📂 Content: <b><?= (int)($row['contents'] ?? 0) ?></b></p>
 
-<a href="?delete=<?php echo $row['id']; ?>" onclick="return confirm('Delete course?')">
-<button class="btn del">Delete</button>
-</a>
+            <p>💰 Price: <b>KES <?= number_format($price,2) ?></b></p>
+
+            <hr>
+
+            <div style="display:flex;gap:5px;flex-wrap:wrap;">
+
+                <button
+                    type="button"
+                    class="btn edit"
+                    onclick="editCourse(
+                        <?= $id ?>,
+                        `<?= addslashes($row['title'] ?? '') ?>`,
+                        `<?= addslashes($row['description'] ?? '') ?>`,
+                        <?= $price ?>
+                    )">
+                    Edit
+                </button>
+
+                <a
+                    class="btn del"
+                    href="?delete_course=<?= $id ?>"
+                    onclick="return confirm('Delete this course?')">
+                    Delete
+                </a>
+
+            </div>
+
+        </div>
+
+    <?php endwhile; ?>
+
+<?php else: ?>
+
+    <div class="card">
+        <h3>No Courses Found</h3>
+        <p>No courses have been assigned to you yet.</p>
+    </div>
+
+<?php endif; ?>
 
 </div>
 
 </div>
 
-<?php } ?>
-
-</div>
-
-</div>
-
-<!--  MODAL  -->
+<!-- MODAL -->
 <div class="modal" id="modal">
-<div class="modal-box" id="modalBox"></div>
+    <div class="modal-box" id="modalBox"></div>
 </div>
 
 <script>
 
-/* OPEN MODAL */
 function openModal(html){
-    document.getElementById("modal").style.display="flex";
-    document.getElementById("modalBox").innerHTML=html;
+    document.getElementById('modal').style.display = 'flex';
+    document.getElementById('modalBox').innerHTML = html;
 }
 
-
-/* EDIT FORM (INLINE) */
 function editCourse(id,title,desc,price){
 
     let form = `
-    <h3>Edit Course</h3>
+        <h3>Edit Course</h3>
 
-    <form method="POST">
+        <form method="POST">
 
-    <input type="hidden" name="id" value="${id}">
+            <input type="hidden" name="id" value="${id}">
 
-    <label>Title</label><br>
-    <input name="title" value="${title}" style="width:100%;"><br><br>
+            <label>Title</label><br>
+            <input type="text" name="title" value="${title}" required>
+            <br><br>
 
-    <label>Description</label><br>
-    <textarea name="description" style="width:100%;">${desc}</textarea><br><br>
+            <label>Description</label><br>
+            <textarea name="description" rows="5">${desc}</textarea>
+            <br><br>
 
-    <label>Price</label><br>
-    <input name="price" value="${price}" style="width:100%;"><br><br>
+            <label>Price</label><br>
+            <input type="number" step="0.01" name="price" value="${price}" required>
+            <br><br>
 
-    <button name="update_course">Update</button>
+            <button class="btn edit" name="update_course">
+                Update Course
+            </button>
 
-    </form>
+        </form>
     `;
 
     openModal(form);
 }
 
-/* CLOSE MODAL */
 window.onclick = function(e){
-    if(e.target.id=="modal"){
-        document.getElementById("modal").style.display="none";
+    if(e.target.id === 'modal'){
+        document.getElementById('modal').style.display = 'none';
     }
-}
+};
 
 </script>
+
 </div>
+
+
 
 <!-- VEDI----> 
 <div class="box" id="vedioSection" style="display:none;">
@@ -2227,7 +2321,8 @@ body{
 
 </div>
 
-<!-- ANNOUNCEMENT --> 
+
+<!-- ANNOUNCEMENT -->
 <div id="anouncementSection" style="display:none;">
 <div class="container">
 
@@ -2236,21 +2331,20 @@ body{
 <!-- =========================
    FORM
 ========================= -->
-
 <div class="box">
 
 <form method="POST">
 
 <label>Select Course</label>
+
 <select name="course_id" required>
+    <option value="">-- Select Course --</option>
 
-<option value="">-- Select Course --</option>
-
-<?php while ($c = $courses->fetch_assoc()) { ?>
-    <option value="<?= $c['id'] ?>">
-        <?= htmlspecialchars($c['title']) ?>
-    </option>
-<?php } ?>
+    <?php while ($c = $announcementList->fetch_assoc()) { ?>
+        <option value="<?= $c['id'] ?>">
+            <?= htmlspecialchars($c['title']) ?>
+        </option>
+    <?php } ?>
 
 </select>
 
@@ -2258,7 +2352,10 @@ body{
 
 <textarea name="message" placeholder="Write message..." required></textarea>
 
-<button name="add" style="border-radius:4px; max-width:auto; margin:10px;">Post Announcement</button>
+<button type="submit" name="add_announcement"
+        style="border-radius:4px; margin:10px;">
+    Post Announcement
+</button>
 
 </form>
 
@@ -2267,39 +2364,49 @@ body{
 <!-- =========================
    TABLE
 ========================= -->
-
 <table>
 
 <tr>
-<th>Course</th>
-<th>Title</th>
-<th>Message</th>
-<th>Date</th>
-<th>Action</th>
+    <th>Course</th>
+    <th>Title</th>
+    <th>Message</th>
+    <th>Date</th>
+    <th>Action</th>
 </tr>
 
-<?php while ($a = $announcements->fetch_assoc()) { ?>
+<?php if ($announcements->num_rows > 0): ?>
 
-<tr>
-<td><?= htmlspecialchars($a['course']) ?></td>
-<td><?= htmlspecialchars($a['title']) ?></td>
-<td><?= htmlspecialchars($a['message']) ?></td>
-<td><?= $a['created_at'] ?></td>
-<td>
-<a class="delete"
-   href="?delete=<?= $a['id'] ?>"
-   onclick="return confirm('Delete announcement?')">
-   Delete
-</a>
-</td>
-</tr>
+    <?php while ($a = $announcements->fetch_assoc()) { ?>
 
-<?php } ?>
+        <tr>
+            <td><?= htmlspecialchars($a['course']) ?></td>
+            <td><?= htmlspecialchars($a['title']) ?></td>
+            <td><?= htmlspecialchars($a['message']) ?></td>
+            <td><?= $a['created_at'] ?></td>
+            <td>
+                <a class="delete"
+                   href="?delete_announcement=<?= $a['id'] ?>"
+                   onclick="return confirm('Delete announcement?')">
+                    Delete
+                </a>
+            </td>
+        </tr>
+
+    <?php } ?>
+
+<?php else: ?>
+
+    <tr>
+        <td colspan="5" style="text-align:center;">
+            No announcements found
+        </td>
+    </tr>
+
+<?php endif; ?>
 
 </table>
 
 </div>
-
 </div>
 
 <!-- PROFILES --> 

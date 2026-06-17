@@ -1,58 +1,25 @@
 <?php
-/* ==========================
-   STUDENT SECTION (SECURE)
-========================== */
-
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-/* ==========================
-   CSRF TOKEN INIT
-========================== */
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
-
-/* ==========================
-   BASIC AUTH CHECK (IMPORTANT)
-   (adjust to your system)
-========================== */
 if (!isset($_SESSION['user_id'])) {
     die("Unauthorized access");
 }
 
-/* OPTIONAL: ROLE CHECK (RBAC LIGHT)
-if ($_SESSION['role'] !== 'admin') {
-    die("Access denied");
-}
-*/
-
-/* ==========================
-   REQUEST HANDLER
-========================== */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    /* ==========================
-       CSRF VALIDATION (GLOBAL)
-    ========================== */
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         die("Invalid CSRF token");
     }
-
-    /* Keep current section after refresh */
-    $_SESSION['active_section'] = 'studentsSection';
-
-    /* ==========================
-       RESET PASSWORD
-    ========================== */
+    $_SESSION['active_section'] = 'studentsSection';   
     if (isset($_POST['reset_student_password'])) {
-
         $student_id = filter_input(INPUT_POST, 'student_id', FILTER_VALIDATE_INT);
         $new_password = trim($_POST['new_password'] ?? '');
-
         if ($student_id && strlen($new_password) >= 6 && strlen($new_password) <= 100) {
-
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
 
             $stmt = $conn->prepare("
@@ -61,52 +28,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 WHERE id = ?
                 LIMIT 1
             ");
-
             $stmt->bind_param("si", $hashed_password, $student_id);
             $stmt->execute();
             $stmt->close();
 
             $_SESSION['success'] = "Password updated successfully.";
         }
-
         header("Location: ".$_SERVER['PHP_SELF']."#studentsSection");
         exit;
     }
-
     /* ==========================
-       STUDENT ACTION (SAFE WHITELIST)
+       STUDENT ACTION 
     ========================== */
     if (isset($_POST['student_action'])) {
-
         $student_id = filter_input(INPUT_POST, 'student_id', FILTER_VALIDATE_INT);
-
-        // STRICT WHITELIST (prevents tampering)
         $allowed_actions = ['activate', 'suspend', 'delete'];
-
         $action = $_POST['action'] ?? '';
-
         if ($student_id && in_array($action, $allowed_actions, true)) {
-
-            /* ==========================
-               ACTIVATE
-            ========================== */
             if ($action === "activate") {
-
                 $stmt = $conn->prepare("
                     UPDATE users
                     SET status='active'
                     WHERE id=?
                     LIMIT 1
                 ");
-
                 $stmt->bind_param("i", $student_id);
                 $stmt->execute();
                 $stmt->close();
 
                 $_SESSION['success'] = "Student activated successfully.";
             }
-
-            /* ==========================
+           /* ==========================
                SUSPEND
             ========================== */
             elseif ($action === "suspend") {
@@ -126,21 +78,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             /* ==========================
-               DELETE (HIGH RISK ACTION)
+               DELETE
             ========================== */
             elseif ($action === "delete") {
-
-                // OPTIONAL SAFETY: prevent self-delete (if admin uses same table)
                 if (isset($_SESSION['user_id']) && $_SESSION['user_id'] == $student_id) {
                     die("You cannot delete your own account");
                 }
-
                 $stmt = $conn->prepare("
                     DELETE FROM users
                     WHERE id=?
                     LIMIT 1
                 ");
-
                 $stmt->bind_param("i", $student_id);
                 $stmt->execute();
                 $stmt->close();
@@ -158,8 +106,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /* =========================
 CREATE COURSE SECTION
-/* =========================
-   CSRF SETUP
 ========================= */
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_role = strtolower(trim($_SESSION['role'] ?? ''));
@@ -168,16 +114,9 @@ if (!$user_id) {
     die("Unauthorized");
 }
 
-/* ==========================
-   CSRF TOKEN
-========================== */
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
-
-/* ==========================
-   HELPERS
-========================== */
 function isValidVideo($tmpFile) {
     $allowed = ['video/mp4', 'video/webm', 'video/ogg'];
     return in_array(mime_content_type($tmpFile), $allowed);
@@ -192,7 +131,6 @@ function convertDriveLink($url) {
     }
     return $url;
 }
-
 /* ==========================
    EDIT FETCH
 ========================== */
@@ -277,8 +215,8 @@ if (isset($_POST['upload_video'])) {
 
     $stmt->execute();
 
-    header("Location: videos.php");
-    exit;
+    header("Location: ".$_SERVER['PHP_SELF']);
+        exit;
 }
 
 /* ==========================
@@ -312,7 +250,6 @@ if (isset($_POST['update_video'])) {
         if (!isValidVideo($_FILES['video']['tmp_name'])) {
             die("Invalid video file");
         }
-
         $upload_dir = "uploads/videos/";
         $filename = time() . "_" . basename($_FILES['video']['name']);
         $local_path = $upload_dir . $filename;
@@ -334,27 +271,21 @@ if (isset($_POST['update_video'])) {
 
     $stmt->bind_param("issssi", $course_id, $title, $description, $cloud_url, $access_type, $id);
     $stmt->execute();
-
-    header("Location: videos.php");
+    header("Location: ".$_SERVER['PHP_SELF']);
     exit;
 }
-
 /* ==========================
    DELETE VIDEO
 ========================== */
 if (isset($_POST['delete_video'])) {
-
     if ($_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         die("CSRF Error");
     }
-
     $id = (int)$_POST['video_id'];
-
     $stmt = $conn->prepare("SELECT local_path FROM course_videos WHERE id=?");
     $stmt->bind_param("i", $id);
     $stmt->execute();
     $video = $stmt->get_result()->fetch_assoc();
-
     if (!empty($video['local_path']) && file_exists($video['local_path'])) {
         unlink($video['local_path']);
     }
@@ -362,11 +293,9 @@ if (isset($_POST['delete_video'])) {
     $stmt = $conn->prepare("DELETE FROM course_videos WHERE id=?");
     $stmt->bind_param("i", $id);
     $stmt->execute();
-
-    header("Location: videos.php");
-    exit;
+    header("Location: ".$_SERVER['PHP_SELF']);
+     exit;
 }
-
 /* ==========================
    VIEW VIDEO
 ========================== */
@@ -399,41 +328,29 @@ if (isset($_GET['view'])) {
        }       }
      
        
-       error_reporting(E_ALL);
+error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 /* =========================
-   CSRF TOKEN
-========================= */
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
-
-/* =========================
-   FETCH COURSES (SAFE)
+   FETCH COURSES 
 ========================= */
 $stmt = $conn->prepare("SELECT * FROM courses ORDER BY id DESC");
 $stmt->execute();
 $courses = $stmt->get_result();
-
 /* =========================
-   FETCH TEACHERS (SAFE)
+   FETCH TEACHERS 
 ========================= */
 $stmt2 = $conn->prepare("SELECT id, full_name FROM users WHERE role = ?");
 $role = "teacher";
 $stmt2->bind_param("s", $role);
 $stmt2->execute();
 $teachers = $stmt2->get_result();
-
-
 /* =========================
    CREATE COURSE
 ========================= */
-
 if (!isset($_SESSION['course_submission_id'])) {
     $_SESSION['course_submission_id'] = '';
 }
-
 if (isset($_POST['create_course'])) {
 
     if (
@@ -442,7 +359,6 @@ if (isset($_POST['create_course'])) {
     ) {
         die("Invalid CSRF token");
     }
-
     /* =========================
        PREVENT DUPLICATE SUBMIT
     ========================= */
@@ -452,7 +368,6 @@ if (isset($_POST['create_course'])) {
         ($_POST['teacher_id'] ?? '') .
         session_id()
     );
-
     if ($_SESSION['course_submission_id'] === $submission_id) {
         $success = "Course already saved.";
     } else {
@@ -465,44 +380,34 @@ if (isset($_POST['create_course'])) {
         $status = trim($_POST['status'] ?? 'Active');
         $price = (float)($_POST['price'] ?? 0);
         $teacher_id = (int)($_POST['teacher_id'] ?? 0);
-
         /* =========================
-           THUMBNAIL UPLOAD (SECURE)
+           THUMBNAIL UPLOAD
         ========================= */
         $thumbnail = "";
-
         if (
             isset($_FILES['thumbnail']) &&
             !empty($_FILES['thumbnail']['name'])
         ) {
-
             $allowed = ['image/jpeg', 'image/png', 'image/webp'];
             $mime = mime_content_type($_FILES['thumbnail']['tmp_name']);
-
             if (!in_array($mime, $allowed)) {
                 die("Invalid image type");
             }
-
             if ($_FILES['thumbnail']['size'] > 2 * 1024 * 1024) {
                 die("Image too large");
             }
-
             $dir = "uploads/";
-
             if (!is_dir($dir)) {
                 mkdir($dir, 0755, true);
             }
-
             $extension = match ($mime) {
                 'image/jpeg' => 'jpg',
                 'image/png'  => 'png',
                 'image/webp' => 'webp',
                 default      => 'jpg'
             };
-
             $fileName = time() . "_" . bin2hex(random_bytes(5)) . "." . $extension;
             $thumbnail = $dir . $fileName;
-
             if (!move_uploaded_file(
                 $_FILES['thumbnail']['tmp_name'],
                 $thumbnail
@@ -512,7 +417,7 @@ if (isset($_POST['create_course'])) {
         }
 
         /* =========================
-           INSERT COURSE (SAFE)
+           INSERT COURSE 
         ========================= */
         $stmt = $conn->prepare("
             INSERT INTO courses
@@ -544,45 +449,31 @@ if (isset($_POST['create_course'])) {
         );
 
         if ($stmt->execute()) {
-
             /* Mark this form submission as processed */
             $_SESSION['course_submission_id'] = $submission_id;
-
             $success = "Course created successfully.";
-
         } else {
-
             $error = "Failed to create course.";
-
         }
-
         $stmt->close();
     }
 }
-
 /* =========================
    DELETE / ARCHIVE COURSE
 ========================= */
 if (isset($_POST['delete_course'])) {
-
     if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         die("Invalid CSRF token");
     }
-
     $id = (int)$_POST['course_id'];
     $action = $_POST['action'];
-
     if ($action === "delete") {
-
         $stmt = $conn->prepare("DELETE FROM courses WHERE id=?");
         $stmt->bind_param("i", $id);
         $stmt->execute();
-
     } else {
-
         // FIX: use valid ENUM value from DB
         $status = "Inactive";
-
         $stmt = $conn->prepare("UPDATE courses SET status=? WHERE id=?");
         $stmt->bind_param("si", $status, $id);
         $stmt->execute();
